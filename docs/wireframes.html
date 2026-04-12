@@ -1,0 +1,3366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Goal-Managed Agent v6 — Concept Wireframes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Warm, calm palette — the quiet command center */
+    --bg:           #faf9f7;
+    --bg-alt:       #f5f3f0;
+    --bg-deep:      #edeae6;
+    --text:         #1c1917;
+    --text-dim:     #6b6560;
+    --text-faint:   #a39e99;
+    --border:       #e8e5e1;
+    --border-hi:    #d4d0cc;
+
+    --accent:       #4f46e5;
+    --accent-bg:    #eef2ff;
+    --accent-mid:   #a5b4fc;
+    --warn:         #b45309;
+    --warn-bg:      #fef9ee;
+    --warn-mid:     #d97706;
+    --error:        #dc2626;
+    --error-bg:     #fff1f2;
+    --success:      #059669;
+    --success-bg:   #ecfdf5;
+    --success-mid:  #6ee7b7;
+    --muted-bg:     #f5f3f0;
+
+    --mono: 'JetBrains Mono', ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+    /* Phase colors */
+    --phase-draft:    #a8a29e;
+    --phase-active:   #4338ca;
+    --phase-review:   #d97706;
+    --phase-complete: #059669;
+    --phase-archived: #d6d3d1;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 252px 1fr;
+    min-height: 100vh;
+  }
+
+  /* ===================== SIDEBAR ===================== */
+  .sidebar {
+    border-right: 1px solid var(--border);
+    padding: 28px 20px 32px;
+    background: var(--bg-alt);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .sidebar-wordmark {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+    margin: 0 0 3px;
+  }
+
+  .sidebar-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 0 0 28px;
+    letter-spacing: -0.01em;
+  }
+
+  .nav-section {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--text-faint);
+    margin: 20px 0 6px 4px;
+  }
+
+  .nav-link {
+    display: block;
+    padding: 7px 10px;
+    margin-bottom: 1px;
+    border-radius: 6px;
+    color: var(--text-dim);
+    text-decoration: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 150ms ease-out, color 150ms ease-out;
+    border: 1px solid transparent;
+  }
+
+  .nav-link:hover {
+    background: var(--bg-deep);
+    color: var(--text);
+  }
+
+  .nav-link.active {
+    background: var(--bg);
+    color: var(--accent);
+    font-weight: 600;
+    border-color: var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+
+  .sidebar-footer {
+    margin-top: 32px;
+    padding: 14px 10px 0;
+    border-top: 1px solid var(--border);
+    font-size: 11.5px;
+    color: var(--text-faint);
+    line-height: 1.6;
+  }
+
+  .sidebar-footer code {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    background: var(--bg-deep);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  /* ===================== MAIN ===================== */
+  .content {
+    padding: 40px 52px 96px;
+    max-width: 1080px;
+  }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .view-header {
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+
+  .view-kicker {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--text-faint);
+    margin-bottom: 6px;
+  }
+
+  .view-title {
+    font-size: clamp(20px, 2.5vw, 26px);
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    line-height: 1.2;
+  }
+
+  .view-subtitle {
+    color: var(--text-dim);
+    margin-top: 8px;
+    font-size: 14px;
+    line-height: 1.6;
+    max-width: 620px;
+  }
+
+  /* ===================== WIRE ===================== */
+  .wire {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 24px;
+    margin: 24px 0;
+    border-radius: 10px;
+  }
+
+  .wire-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--text-faint);
+    margin-bottom: 16px;
+  }
+
+  /* ===================== NOTES ===================== */
+  .notes {
+    background: var(--accent-bg);
+    border-left: 3px solid var(--accent-mid);
+    padding: 16px 20px;
+    margin: 24px 0;
+    border-radius: 0 8px 8px 0;
+  }
+
+  .notes-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+
+  .notes ul {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .notes li {
+    margin-bottom: 6px;
+  }
+
+  .notes li b { color: var(--text); }
+  .notes li code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    background: rgba(0,0,0,0.04);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  .refs {
+    font-size: 12px;
+    color: var(--text-faint);
+    margin-top: 24px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border);
+    line-height: 1.6;
+  }
+
+  /* ===================== NODE CARDS (tree) ===================== */
+  .node-card {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border-hi);
+    padding: 10px 14px;
+    margin: 5px 0;
+    font-size: 12px;
+    background: var(--bg);
+    display: grid;
+    grid-template-columns: 80px 1fr 120px 70px;
+    gap: 10px;
+    align-items: center;
+    border-radius: 6px;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .node-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .node-card.indent-1 { margin-left: 24px; }
+  .node-card.indent-2 { margin-left: 48px; }
+  .node-card.indent-3 { margin-left: 72px; }
+
+  .node-card.phase-draft    { border-left-color: var(--phase-draft); }
+  .node-card.phase-active   { border-left-color: var(--phase-active); }
+  .node-card.phase-review   { border-left-color: var(--phase-review); }
+  .node-card.phase-complete { border-left-color: var(--phase-complete); }
+  .node-card.phase-archived { border-left-color: var(--phase-archived); opacity: 0.6; }
+
+  /* ===================== PHASE BADGES ===================== */
+  .phase-badge {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+    border: 1px solid;
+  }
+
+  .phase-badge.draft    { color: #6b7280; border-color: #d1d5db; background: #f3f4f6; }
+  .phase-badge.active   { color: #4338ca; border-color: #c7d2fe; background: #eef2ff; }
+  .phase-badge.review   { color: #92400e; border-color: #fcd34d; background: #fffbeb; }
+  .phase-badge.complete { color: #065f46; border-color: #6ee7b7; background: #ecfdf5; }
+  .phase-badge.archived { color: var(--text-faint); border-color: var(--border); background: var(--bg-alt); }
+
+  .node-intent {
+    font-size: 12.5px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+
+  /* ===================== PROGRESS BAR ===================== */
+  .progress-bar {
+    height: 5px;
+    background: var(--bg-deep);
+    border-radius: 99px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 99px;
+    transition: width 300ms ease-out;
+  }
+
+  .progress-fill.complete { background: var(--success); }
+
+  .progress-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-top: 3px;
+  }
+
+  /* ===================== FLAGS ===================== */
+  .flags {
+    display: flex;
+    gap: 4px;
+    justify-content: flex-end;
+  }
+
+  .flag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    border: 1px solid;
+    border-radius: 50%;
+  }
+
+  .flag.blocker { color: var(--error); border-color: var(--error); background: var(--error-bg); }
+  .flag.review  { color: var(--warn); border-color: var(--warn-mid); background: var(--warn-bg); }
+  .flag.rollup  { color: var(--error); border-color: var(--error); background: transparent; }
+
+  .tree-line { color: var(--text-faint); font-family: var(--mono); }
+
+  /* ===================== PANEL (Layer 1) ===================== */
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  .panel-breadcrumb {
+    padding: 10px 18px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-alt);
+  }
+
+  .panel-breadcrumb a {
+    color: var(--text-dim);
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 150ms ease-out;
+  }
+
+  .panel-breadcrumb a:hover { color: var(--accent); }
+
+  .panel-header {
+    padding: 20px 22px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .panel-intent {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    letter-spacing: -0.015em;
+    line-height: 1.35;
+    color: var(--text);
+  }
+
+  .panel-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    align-items: center;
+  }
+
+  .panel-meta b { color: var(--text); font-weight: 600; }
+
+  .panel-section {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .panel-section:last-child { border-bottom: none; }
+
+  .panel-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--text-faint);
+    margin-bottom: 12px;
+  }
+
+  .acceptance-group { margin-bottom: 14px; }
+
+  .acceptance-group-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 5px;
+    font-family: var(--mono);
+  }
+
+  .assertion-item, .metric-item, .rubric-item {
+    display: grid;
+    grid-template-columns: 50px 1fr 100px;
+    gap: 10px;
+    padding: 4px 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    align-items: center;
+    color: var(--text-dim);
+  }
+
+  /* ===================== CHECK BADGE ===================== */
+  .check-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid;
+  }
+
+  .check-badge.pass    { color: var(--success); border-color: var(--success-mid); background: var(--success-bg); }
+  .check-badge.fail    { color: var(--error); border-color: #fca5a5; background: var(--error-bg); }
+  .check-badge.pending { color: var(--text-faint); border-color: var(--border); background: var(--bg-alt); }
+
+  .metric-bar { display: flex; align-items: center; gap: 6px; }
+  .metric-bar .progress-bar { flex: 1; }
+
+  .rubric-score {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: right;
+    color: var(--text);
+  }
+
+  .rubric-score.priority { color: var(--warn); }
+
+  /* ===================== RUN ITEMS ===================== */
+  .run-item {
+    display: grid;
+    grid-template-columns: 80px 110px 90px 1fr;
+    gap: 10px;
+    padding: 6px 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .run-item:last-child { border-bottom: none; }
+  .run-item b { color: var(--text); font-weight: 500; }
+
+  .run-state {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 10px;
+    font-family: var(--mono);
+    font-weight: 500;
+  }
+
+  .run-state.ok    { color: var(--success); border-color: var(--success-mid); background: var(--success-bg); }
+  .run-state.warn  { color: var(--warn); border-color: var(--warn-mid); background: var(--warn-bg); }
+  .run-state.error { color: var(--error); border-color: #fca5a5; background: var(--error-bg); }
+
+  .log-item {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 3px 0;
+    line-height: 1.5;
+  }
+
+  .log-item b { color: var(--text); }
+
+  .policy-line {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 2px 0;
+    color: var(--text);
+  }
+
+  .policy-line .k { color: var(--text-dim); }
+
+  /* ===================== BUTTONS ===================== */
+  .btn-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .btn {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-dim);
+    font-size: 12px;
+    font-family: var(--sans);
+    font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 150ms ease-out, color 150ms ease-out, background 150ms ease-out, box-shadow 150ms ease-out;
+  }
+
+  .btn:hover {
+    border-color: var(--border-hi);
+    color: var(--text);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  }
+
+  .btn.primary {
+    border-color: var(--accent-mid);
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .btn.primary:hover {
+    background: #e0e7ff;
+    border-color: var(--accent);
+    box-shadow: 0 1px 4px rgba(67,56,202,0.12);
+  }
+
+  .btn.danger {
+    border-color: #fca5a5;
+    background: var(--error-bg);
+    color: var(--error);
+    font-weight: 600;
+  }
+
+  .btn.danger:hover {
+    background: #ffe4e8;
+    border-color: var(--error);
+  }
+
+  .btn.success {
+    border-color: var(--success-mid);
+    background: var(--success-bg);
+    color: var(--success);
+    font-weight: 600;
+  }
+
+  .btn.success:hover {
+    background: #d1fae5;
+    border-color: var(--success);
+  }
+
+  .btn.disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+  }
+
+  /* ===================== OVERLAY (Layer 2) ===================== */
+  .overlay {
+    border: 1px solid var(--border-hi);
+    background: var(--bg);
+    border-radius: 10px;
+    box-shadow: 0 0 0 6px var(--bg-deep);
+    margin: 16px 0;
+  }
+
+  .overlay-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-alt);
+    border-radius: 10px 10px 0 0;
+  }
+
+  .overlay-title {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .overlay-section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  .overlay-section:last-child { border-bottom: none; }
+
+  .kv {
+    display: grid;
+    grid-template-columns: 148px 1fr;
+    gap: 10px;
+    padding: 3px 0;
+    font-size: 12px;
+    align-items: baseline;
+  }
+
+  .kv .k {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+
+  .timeline-item {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 0;
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  .timeline-item .ts {
+    color: var(--text-faint);
+    margin-right: 10px;
+  }
+
+  .timeline-item .act { color: var(--accent); font-weight: 500; }
+
+  .locked-banner {
+    padding: 10px 14px;
+    background: var(--bg-alt);
+    border: 1px dashed var(--border-hi);
+    font-size: 11.5px;
+    font-style: italic;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 10px;
+    border-radius: 6px;
+  }
+
+  /* ===================== PHASE DIAGRAM ===================== */
+  .phases-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin: 24px 0;
+  }
+
+  .phase-box {
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--border-hi);
+    padding: 14px;
+    background: var(--bg);
+    border-radius: 0 0 8px 8px;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .phase-box:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+
+  .phase-box.draft    { border-top-color: var(--phase-draft); }
+  .phase-box.active   { border-top-color: var(--phase-active); }
+  .phase-box.review   { border-top-color: var(--phase-review); }
+  .phase-box.complete { border-top-color: var(--phase-complete); }
+  .phase-box.archived { border-top-color: var(--phase-archived); }
+
+  .phase-box h4 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+
+  .phase-box ul {
+    margin: 4px 0;
+    padding-left: 16px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .phase-box .label {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 10px;
+    margin-bottom: 2px;
+  }
+
+  .arrows-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    font-size: 10px;
+    color: var(--text-faint);
+    text-align: center;
+    font-family: var(--mono);
+  }
+
+  .arrow {
+    position: relative;
+    height: 20px;
+  }
+
+  .arrow::after {
+    content: "→";
+    position: absolute;
+    right: -12px;
+    top: 0;
+    color: var(--border-hi);
+    font-size: 16px;
+  }
+
+  /* ===================== CHAT / FREEZE SESSION ===================== */
+  .chat {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .chat-header {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-alt);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .chat-body { padding: 20px; }
+
+  .msg {
+    margin-bottom: 18px;
+    font-size: 13px;
+  }
+
+  .msg-role {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 5px;
+    font-family: var(--mono);
+  }
+
+  .msg.agent .msg-role  { color: var(--accent); }
+  .msg.user .msg-role   { color: var(--success); }
+  .msg.system .msg-role { color: var(--text-faint); }
+
+  .msg-body {
+    padding: 10px 14px;
+    border-left: 2px solid var(--border);
+    background: var(--bg-alt);
+    border-radius: 0 6px 6px 0;
+    white-space: pre-wrap;
+    color: var(--text);
+    line-height: 1.65;
+    font-size: 13px;
+  }
+
+  .msg.agent .msg-body  { border-left-color: var(--accent-mid); }
+  .msg.user .msg-body   { border-left-color: var(--success-mid); }
+
+  .msg .reasoning {
+    color: var(--text-dim);
+    font-size: 12px;
+    font-style: italic;
+    margin-top: 8px;
+    line-height: 1.6;
+  }
+
+  .msg .proposal {
+    background: var(--accent-bg);
+    border: 1px solid var(--accent-mid);
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin: 10px 0;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.65;
+    color: var(--text);
+  }
+
+  .chat-footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-alt);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* ===================== RUN TREE ===================== */
+  .runtree {
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 20px;
+    border-radius: 10px;
+  }
+
+  .run-node {
+    border: 1px solid var(--border);
+    padding: 12px 16px;
+    margin: 6px 0;
+    background: var(--bg);
+    border-radius: 8px;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .run-node:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+
+  .run-node.primary  { border-left: 3px solid var(--accent); }
+  .run-node.subrun   { border-left: 3px solid var(--border-hi); margin-left: 32px; }
+  .run-node.synth    { border-left: 3px solid var(--success); background: var(--success-bg); }
+
+  .run-node .run-header {
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .run-node .run-meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .run-return {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: var(--bg-alt);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.65;
+  }
+
+  .run-return .k { color: var(--text-faint); }
+
+  .run-return.flagged {
+    background: var(--warn-bg);
+    border-left: 2px solid var(--warn-mid);
+  }
+
+  /* ===================== LAYERS SIDE-BY-SIDE ===================== */
+  .layers {
+    display: grid;
+    grid-template-columns: 220px 1fr 1.2fr;
+    gap: 16px;
+    margin: 20px 0;
+  }
+
+  .layer-col {
+    border: 1px dashed var(--border);
+    padding: 14px;
+    border-radius: 8px;
+  }
+
+  .layer-col h4 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .layer-col .caption {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    line-height: 1.5;
+  }
+
+  .layer-col .layer-invariant {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    margin-top: 12px;
+    border-radius: 5px;
+    color: var(--text-dim);
+  }
+
+  /* ===================== TIMELINE ===================== */
+  .timeline {
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  .tl-row {
+    display: grid;
+    grid-template-columns: 68px 28px 1fr;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    align-items: baseline;
+  }
+
+  .tl-row:last-child { border-bottom: none; }
+
+  .tl-time {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+
+  .tl-marker {
+    display: flex;
+    justify-content: center;
+    color: var(--text-faint);
+    font-size: 12px;
+  }
+
+  .tl-event {
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+
+  .tl-event b { font-weight: 600; }
+
+  .tl-event .note {
+    display: block;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    font-style: italic;
+    margin-top: 3px;
+    white-space: pre-wrap;
+    line-height: 1.55;
+  }
+
+  .tl-row.user-action { background: var(--success-bg); }
+  .tl-row.trigger     { background: var(--warn-bg); }
+  .tl-row.reconcile   { background: var(--accent-bg); }
+
+  /* ===================== HELPERS ===================== */
+  .muted { color: var(--text-dim); }
+  .mono  { font-family: var(--mono); }
+  .tiny  { font-size: 11px; }
+
+  .hr { border: none; border-top: 1px dashed var(--border); margin: 20px 0; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    background: var(--bg-alt);
+  }
+
+  /* ===================== WARN BANNER ===================== */
+  .warn-banner {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-mid);
+    border-left: 3px solid var(--warn);
+    padding: 12px 18px;
+    border-radius: 0 8px 8px 0;
+    margin: 16px 0;
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  .warn-banner b { color: var(--warn); }
+
+  .warn-banner a {
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  /* ===================== COLUMN VIEW (1b) ===================== */
+  .cols {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    overflow-x: auto;
+    background: var(--bg-alt);
+    min-height: 420px;
+  }
+
+  .col {
+    flex: 0 0 260px;
+    border-right: 1px solid var(--border);
+    padding: 16px 14px;
+    background: var(--bg);
+  }
+
+  .col:last-child { border-right: none; }
+
+  .col-header {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .col-header b { color: var(--text); font-weight: 700; }
+
+  .col-card {
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    padding: 10px 28px 10px 12px;
+    margin-bottom: 7px;
+    background: var(--bg);
+    border-radius: 7px;
+    position: relative;
+    cursor: pointer;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .col-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
+
+  .col-card.phase-draft    { border-left-color: var(--phase-draft); }
+  .col-card.phase-active   { border-left-color: var(--phase-active); }
+  .col-card.phase-review   { border-left-color: var(--phase-review); }
+  .col-card.phase-complete { border-left-color: var(--phase-complete); }
+  .col-card.phase-archived { border-left-color: var(--phase-archived); opacity: 0.55; }
+
+  .col-card.selected {
+    background: var(--accent-bg);
+    outline: 2px solid var(--accent-mid);
+    outline-offset: -1px;
+  }
+
+  .col-card .col-intent {
+    font-weight: 600;
+    font-size: 12.5px;
+    margin-bottom: 4px;
+    line-height: 1.35;
+    color: var(--text);
+  }
+
+  .col-card .col-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .col-card .chevron {
+    position: absolute;
+    right: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-faint);
+    font-size: 13px;
+  }
+
+  /* ===================== RAIL TREE (1c) ===================== */
+  .rail-tree {
+    padding: 20px 22px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .rail-card {
+    border: 1px solid var(--border);
+    padding: 11px 16px;
+    margin: 7px 0;
+    background: var(--bg);
+    border-radius: 8px;
+    display: grid;
+    grid-template-columns: 82px 1fr 130px 30px;
+    gap: 12px;
+    align-items: center;
+    position: relative;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .rail-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+
+  .rail-card.phase-draft    { border-left: 3px solid var(--phase-draft); }
+  .rail-card.phase-active   { border-left: 3px solid var(--phase-active); }
+  .rail-card.phase-review   { border-left: 3px solid var(--phase-review); }
+  .rail-card.phase-complete { border-left: 3px solid var(--phase-complete); }
+  .rail-card.phase-archived { border-left: 3px solid var(--phase-archived); opacity: 0.55; }
+
+  .rail-intent {
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--text);
+  }
+
+  .rail-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-top: 2px;
+  }
+
+  .rail-children {
+    margin-left: 22px;
+    padding-left: 20px;
+    border-left: 2px solid var(--border);
+    position: relative;
+  }
+
+  .rail-children.depth-1 { border-left-color: var(--accent-mid); }
+  .rail-children.depth-2 { border-left-color: var(--success-mid); }
+  .rail-children.depth-3 { border-left-color: var(--warn-mid); }
+  .rail-children.depth-4 { border-left-color: var(--border-hi); }
+
+  .rail-children > .rail-card::before {
+    content: '';
+    position: absolute;
+    left: -22px;
+    top: 50%;
+    width: 20px;
+    height: 2px;
+    background: var(--border);
+  }
+
+  .rail-children.depth-1 > .rail-card::before { background: var(--accent-mid); }
+  .rail-children.depth-2 > .rail-card::before { background: var(--success-mid); }
+  .rail-children.depth-3 > .rail-card::before { background: var(--warn-mid); }
+  .rail-children.depth-4 > .rail-card::before { background: var(--border-hi); }
+
+  .depth-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-faint);
+    background: var(--bg-alt);
+    border-radius: 99px;
+    margin-left: 6px;
+    border: 1px solid var(--border);
+  }
+
+  /* ===================== GENERATION LANES (1d) ===================== */
+  .lanes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 22px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .lane { padding: 10px 0; }
+
+  .lane-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+  }
+
+  .lane-label b { color: var(--text-dim); }
+
+  .lane-cards {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .lane-card {
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .lane-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
+
+  .lane[data-depth="0"] .lane-card { width: 240px; }
+  .lane[data-depth="1"] .lane-card { width: 200px; }
+  .lane[data-depth="2"] .lane-card { width: 170px; }
+  .lane[data-depth="3"] .lane-card { width: 150px; }
+
+  .lane-card .lane-intent {
+    font-weight: 600;
+    font-size: 12.5px;
+    line-height: 1.35;
+    margin-bottom: 4px;
+    color: var(--text);
+  }
+
+  .lane[data-depth="1"] .lane-card .lane-intent { font-size: 11.5px; }
+  .lane[data-depth="2"] .lane-card .lane-intent { font-size: 11px; }
+  .lane[data-depth="3"] .lane-card .lane-intent { font-size: 10.5px; }
+
+  .lane-card .lane-meta {
+    font-family: var(--mono);
+    color: var(--text-faint);
+    font-size: 10px;
+  }
+
+  .lane-card.phase-draft    { border-left-color: var(--phase-draft); }
+  .lane-card.phase-active   { border-left-color: var(--phase-active); }
+  .lane-card.phase-review   { border-left-color: var(--phase-review); }
+  .lane-card.phase-complete { border-left-color: var(--phase-complete); }
+  .lane-card.phase-archived { border-left-color: var(--phase-archived); opacity: 0.55; }
+
+  .lane-card.selected {
+    background: var(--accent-bg);
+    outline: 2px solid var(--accent-mid);
+    outline-offset: -1px;
+  }
+
+  .lane-connector {
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-faint);
+    padding: 2px 0;
+    font-family: var(--mono);
+  }
+
+  /* ===================== TOP-DOWN TREE (1e) ===================== */
+  .tree-td-wrap {
+    padding: 36px 22px;
+    overflow-x: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .tree-td {
+    display: flex;
+    justify-content: center;
+    min-width: max-content;
+  }
+
+  .tree-td, .tree-td ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .tree-td ul {
+    display: flex;
+    justify-content: center;
+    padding-top: 24px;
+    position: relative;
+  }
+
+  .tree-td ul::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 1px;
+    height: 14px;
+    background: var(--border);
+    transform: translateX(-50%);
+  }
+
+  .tree-td li {
+    flex: 0 0 auto;
+    padding: 12px 12px 0;
+    position: relative;
+    text-align: center;
+  }
+
+  .tree-td li::before,
+  .tree-td li::after {
+    content: '';
+    position: absolute;
+    top: 10px;
+    width: 50%;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .tree-td li::before { left: 0; }
+  .tree-td li::after  { right: 0; }
+
+  .tree-td li:only-child::before,
+  .tree-td li:only-child::after { display: none; }
+
+  .tree-td li:first-child::before { background: transparent; }
+  .tree-td li:last-child::after  { background: transparent; }
+
+  .tree-td li > .node-body::before {
+    content: '';
+    position: absolute;
+    top: -14px;
+    left: 50%;
+    width: 1px;
+    height: 14px;
+    background: var(--border);
+    transform: translateX(-50%);
+  }
+
+  .tree-td > ul { padding-top: 0; }
+  .tree-td > ul::before { display: none; }
+  .tree-td > ul > li { padding-top: 0; }
+  .tree-td > ul > li::before,
+  .tree-td > ul > li::after { display: none; }
+  .tree-td > ul > li > .node-body::before { display: none; }
+
+  .tree-td .node-body {
+    display: inline-block;
+    padding: 11px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: 8px;
+    font-size: 11.5px;
+    min-width: 210px;
+    max-width: 240px;
+    text-align: left;
+    position: relative;
+    z-index: 2;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .tree-td .node-body:hover { box-shadow: 0 3px 12px rgba(0,0,0,0.08); }
+
+  .tree-td .node-body.phase-draft    { border-left-color: var(--phase-draft); }
+  .tree-td .node-body.phase-active   { border-left-color: var(--phase-active); }
+  .tree-td .node-body.phase-review   { border-left-color: var(--phase-review); background: #fffbeb; }
+  .tree-td .node-body.phase-complete { border-left-color: var(--phase-complete); }
+  .tree-td .node-body.phase-archived { border-left-color: var(--phase-archived); opacity: 0.55; }
+
+  /* Focused/selected node in tree — clearly different, not dramatic */
+  .tree-td .node-body.focused {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 2px 8px rgba(79,70,229,0.10);
+    background: var(--accent-bg);
+  }
+
+  .tree-td .n-title {
+    font-weight: 600;
+    font-size: 11.5px;
+    line-height: 1.35;
+    margin-bottom: 4px;
+    color: var(--text);
+  }
+
+  .tree-td .n-meta {
+    font-family: var(--mono);
+    color: var(--text-faint);
+    font-size: 9.5px;
+    margin-bottom: 7px;
+  }
+
+  .tree-td .n-bar {
+    height: 3px;
+    background: var(--bg-deep);
+    border-radius: 99px;
+    overflow: hidden;
+    margin-bottom: 7px;
+  }
+
+  .tree-td .n-bar > div {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 99px;
+  }
+
+  .tree-td .n-bar > div.complete { background: var(--success); }
+
+  .tree-td .n-badges {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ===================== OVERVIEW (v1f) ===================== */
+  .overview-intro {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+
+  .overview-intro b { color: var(--text); font-weight: 600; }
+
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 16px;
+  }
+
+  .ov-card {
+    border: 1px solid var(--border);
+    border-left-width: 4px;
+    padding: 20px 22px;
+    background: var(--bg);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
+    transition: box-shadow 150ms ease-out;
+  }
+
+  .ov-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.07); }
+
+  .ov-card.phase-draft    { border-left-color: var(--phase-draft); }
+  .ov-card.phase-active   { border-left-color: var(--phase-active); }
+  .ov-card.phase-review   { border-left-color: var(--phase-review); }
+  .ov-card.phase-complete { border-left-color: var(--phase-complete); }
+  .ov-card.phase-archived { border-left-color: var(--phase-archived); opacity: 0.6; }
+
+  .ov-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .ov-age {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text-faint);
+  }
+
+  .ov-intent {
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.3;
+    margin-bottom: 14px;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+
+  .ov-progress { margin-bottom: 10px; }
+  .ov-progress .progress-bar { height: 6px; }
+
+  .ov-progress-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text-faint);
+    margin-top: 4px;
+  }
+
+  .ov-stats {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 8px 0;
+    margin-bottom: 8px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ov-stats b { color: var(--text); font-weight: 700; }
+
+  .ov-next {
+    font-size: 13px;
+    color: var(--text);
+    margin: 10px 0 14px;
+    flex: 1;
+    line-height: 1.6;
+    font-weight: 500;
+  }
+
+  .ov-next .k {
+    font-size: 9.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--text-faint);
+    display: block;
+    margin-bottom: 5px;
+  }
+
+  /* Cards with active flags get a subtle warning tint on the footer */
+  .ov-card.phase-review .ov-footer,
+  .ov-card.phase-active:has(.flag) .ov-footer {
+    border-top-color: #fbbf24;
+  }
+
+  .ov-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .ov-footer .flags { justify-content: flex-start; }
+
+  /* "Open tree" as a subtle text link */
+  .ov-footer a.tree-link {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--accent);
+    text-decoration: none;
+    cursor: pointer;
+    transition: opacity 150ms ease-out;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .ov-footer a.tree-link:hover { opacity: 0.7; }
+
+  /* ===================== BREADCRUMB ===================== */
+  .focus-breadcrumb {
+    font-size: 12px;
+    padding: 10px 16px;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    color: var(--text-dim);
+  }
+
+  .focus-breadcrumb a {
+    color: var(--text-dim);
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 150ms ease-out;
+  }
+
+  .focus-breadcrumb a:hover { color: var(--accent); }
+  .focus-breadcrumb b { color: var(--text); font-weight: 600; }
+
+  /* ===================== ACTION AREA (Node panel) ===================== */
+  .action-area {
+    background: #f8f7f5;
+    padding: 22px 22px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .action-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    color: var(--text-faint);
+    margin-bottom: 14px;
+  }
+
+  .primary-btns {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .btn-xl {
+    flex: 1;
+    padding: 11px 18px;
+    min-height: 44px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: var(--sans);
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    letter-spacing: -0.01em;
+    transition: box-shadow 150ms ease-out, background 150ms ease-out, opacity 150ms ease-out;
+  }
+
+  .btn-xl:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+  .btn-xl:active { opacity: 0.88; }
+
+  .btn-xl.approve {
+    background: #059669;
+    border-color: #047857;
+    color: #ffffff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+
+  .btn-xl.approve:hover { background: #047857; }
+
+  .btn-xl.reject {
+    background: #dc2626;
+    border-color: #b91c1c;
+    color: #ffffff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+
+  .btn-xl.reject:hover { background: #b91c1c; }
+
+  .btn-xl.trigger {
+    background: var(--accent);
+    border-color: #4338ca;
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+
+  .btn-xl.trigger:hover { background: #4338ca; }
+
+  .btn-xl.stop {
+    background: var(--bg);
+    border-color: var(--border-hi);
+    color: var(--text-dim);
+    box-shadow: none;
+  }
+
+  /* Chat input */
+  .tell-agent-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    border: 1px solid var(--border-hi);
+    border-radius: 8px;
+    background: var(--bg);
+    overflow: hidden;
+    transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+  }
+
+  .tell-agent-row:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(79,70,229,0.10);
+  }
+
+  .tell-agent-label {
+    padding: 11px 13px;
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    border-right: 1px solid var(--border-hi);
+    background: var(--bg-alt);
+    flex: 0 0 auto;
+    font-weight: 600;
+  }
+
+  .tell-agent-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 11px 12px;
+    font-family: var(--sans);
+    font-size: 13px;
+    background: transparent;
+    color: var(--text);
+  }
+
+  .tell-agent-input::placeholder { color: var(--text-dim); opacity: 0.6; }
+
+  .tell-agent-send {
+    padding: 9px 16px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--sans);
+    cursor: pointer;
+    transition: background 150ms ease-out;
+    flex: 0 0 auto;
+  }
+
+  .tell-agent-send:hover { background: #4338ca; }
+
+  /* Secondary links — clearly de-emphasized */
+  .secondary-links {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    align-items: center;
+  }
+
+  .secondary-links a {
+    font-size: 11px;
+    color: var(--text-faint);
+    text-decoration: none;
+    cursor: pointer;
+    padding: 2px 0;
+    border-bottom: 1px solid transparent;
+    transition: color 150ms ease-out, border-color 150ms ease-out;
+  }
+
+  .secondary-links a:hover {
+    color: var(--text-dim);
+    border-bottom-color: var(--border-hi);
+  }
+
+  /* Separator dots between secondary links */
+  .secondary-links a + a::before {
+    content: "·";
+    margin-right: 6px;
+    color: var(--border-hi);
+    pointer-events: none;
+  }
+
+  /* Collapsed accordion rows — visually inert, recede behind the action area */
+  .accordion-row {
+    padding: 9px 22px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    transition: background 150ms ease-out;
+    background: var(--bg);
+  }
+
+  .accordion-row:last-child { border-bottom: none; }
+  .accordion-row:hover { background: var(--bg-alt); }
+
+  .accordion-label {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .accordion-label .chevron-icon {
+    color: var(--text-faint);
+    font-size: 10px;
+  }
+
+  .accordion-summary {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text-faint);
+    text-align: right;
+    max-width: 260px;
+  }
+
+  /* Notification banner — present but not alarming */
+  .notif-banner {
+    padding: 13px 20px 13px 16px;
+    background: #fef9ee;
+    border-bottom: 1px solid #fde68a;
+    border-left: 3px solid #d97706;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .notif-icon {
+    flex: 0 0 auto;
+    margin-top: 2px;
+  }
+
+  .notif-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #92400e;
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+  }
+
+  .notif-body {
+    font-size: 13px;
+    color: #78350f;
+    line-height: 1.6;
+    font-weight: 400;
+  }
+
+  .calm-footer {
+    padding: 11px 22px;
+    background: var(--bg-alt);
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-faint);
+    text-align: center;
+    font-style: italic;
+  }
+
+  /* ===================== FLOW DIAGRAM (v4) ===================== */
+  .flow-journey {
+    display: flex;
+    gap: 0;
+    align-items: stretch;
+    overflow-x: auto;
+  }
+
+  .flow-level {
+    flex: 0 0 230px;
+    border: 1px solid var(--border);
+    border-right: none;
+    padding: 18px 16px;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .flow-level:first-child { border-radius: 10px 0 0 10px; }
+  .flow-level:last-child  { border-right: 1px solid var(--border); border-radius: 0 10px 10px 0; }
+
+  .flow-level.highlighted {
+    background: #f5f3ff;
+    border-color: #c4b5fd;
+    border-right: 1px solid #c4b5fd;
+    border-left: 3px solid var(--accent);
+    z-index: 1;
+  }
+
+  .flow-level.highlighted + .flow-arrow-col {
+    background: #e0e7ff;
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .flow-level-num {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 5px;
+  }
+
+  .flow-level-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 10px;
+    letter-spacing: -0.01em;
+  }
+
+  .flow-level-desc {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    margin-bottom: 14px;
+    line-height: 1.55;
+  }
+
+  .flow-level-desc b { color: var(--text); }
+  .flow-level-desc b.accent { color: var(--accent); }
+
+  .flow-level-sketch {
+    flex: 1;
+    font-size: 10px;
+    margin-bottom: 12px;
+  }
+
+  .flow-question {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-align: center;
+    margin: 10px 0 8px;
+    font-style: italic;
+  }
+
+  .flow-arrow-col {
+    flex: 0 0 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-deep);
+    border-top: 1px solid var(--border-hi);
+    border-bottom: 1px solid var(--border-hi);
+    color: var(--accent);
+    font-size: 20px;
+    font-weight: 900;
+  }
+
+  /* Table in v4 */
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+
+  .comparison-table thead tr {
+    border-bottom: 2px solid var(--border);
+    text-align: left;
+  }
+
+  .comparison-table th {
+    padding: 9px 12px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-faint);
+  }
+
+  .comparison-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    vertical-align: top;
+  }
+
+  .comparison-table tr:last-child td { border-bottom: none; }
+
+  .comparison-table tr.highlighted-row td {
+    background: var(--accent-bg);
+  }
+
+  .comparison-table tr.highlighted-row td:first-child {
+    font-weight: 700;
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <nav class="sidebar">
+    <div class="sidebar-wordmark">Goal-Managed Agent v6</div>
+    <div class="sidebar-title">Concept Wireframes</div>
+    <div class="nav-section">Intent Layer</div>
+    <a class="nav-link active" data-view="v1f">1. Workspace overview</a>
+    <a class="nav-link" data-view="v1e">2. Objective tree (focused)</a>
+    <a class="nav-link" data-view="v2">3. Node panel (Layer 1)</a>
+    <a class="nav-link" data-view="v3">4. Run detail (Layer 2)</a>
+    <a class="nav-link" data-view="v4">5. Three layers side-by-side</a>
+    <div class="nav-section">Node lifecycle</div>
+    <a class="nav-link" data-view="v5">6. 5 phases visualization</a>
+    <a class="nav-link" data-view="v6">7. Freeze co-authoring</a>
+    <div class="nav-section">Execution layer</div>
+    <a class="nav-link" data-view="v7">8. Fork-Return-Synthesize</a>
+    <a class="nav-link" data-view="v8">9. Contract reconcile flow</a>
+    <div class="sidebar-footer">
+      Wireframes are intentionally minimal. Focus on logic and expansion
+      behavior. Cross-reference with
+      <code>goal-managed-agent-v6-foundations.md</code> for the locked
+      decisions that each view illustrates.
+    </div>
+  </nav>
+
+  <!-- ============ MAIN ============ -->
+  <main class="content">
+
+    <!-- ========== V1f: Workspace overview (default active) ========== -->
+    <section class="view active" id="v1f">
+      <header class="view-header">
+        <div class="view-kicker">View 1 · Intent Layer · overview</div>
+        <h2 class="view-title">Workspace overview</h2>
+        <p class="view-subtitle">
+          Dashboard home. A flat list of top-level Objectives — depth 0
+          only. No tree is drawn here; parallel Objectives are visually
+          parallel, because that is what they are. Click any Objective's
+          card to focus into its tree (view 2).
+        </p>
+      </header>
+
+      <div class="overview-intro">
+        <span>Viewing <b>4</b> top-level Objectives · sorted by last activity</span>
+        <span class="muted">hierarchical depth <b>0</b> only</span>
+      </div>
+
+      <div class="overview-grid">
+
+        <div class="ov-card phase-active">
+          <div class="ov-header">
+            <span class="phase-badge active">ACTIVE</span>
+            <span class="ov-age">last activity 2h ago</span>
+          </div>
+          <div class="ov-intent">Build OKR Dashboard product</div>
+          <div class="ov-progress">
+            <div class="progress-bar"><div class="progress-fill" style="width:42%"></div></div>
+            <div class="ov-progress-label">own 42% · rollup 38%</div>
+          </div>
+          <div class="ov-stats">
+            <b>3</b> sub-goals · <b>5</b> runs · <b>1</b> in-flight
+          </div>
+          <div class="ov-next">
+            <span class="k">Next attention</span>
+            Review synthesis on "Validate Fork-Return-Synthesize" — blocker: evidence density 7.2 &lt; 8.5 threshold
+          </div>
+          <div class="ov-footer">
+            <div class="flags"><span class="flag rollup">!</span> <span class="flag review">?</span></div>
+            <a class="tree-link" data-view="v1e">Open tree →</a>
+          </div>
+        </div>
+
+        <div class="ov-card phase-active">
+          <div class="ov-header">
+            <span class="phase-badge active">ACTIVE</span>
+            <span class="ov-age">last activity 6h ago</span>
+          </div>
+          <div class="ov-intent">Continuous research: auto-research v6</div>
+          <div class="ov-progress">
+            <div class="progress-bar"><div class="progress-fill" style="width:60%"></div></div>
+            <div class="ov-progress-label">own 60% · rollup 60%</div>
+          </div>
+          <div class="ov-stats">
+            <b>0</b> sub-goals · <b>23</b> runs · <b>1</b> in-flight
+          </div>
+          <div class="ov-next">
+            <span class="k">Next attention</span>
+            Judge plateau at 0.90 after v6; recommendation: stop expanding prose, prove one instrumented KR prototype, then write the tech spec
+          </div>
+          <div class="ov-footer">
+            <div class="flags"></div>
+            <a class="tree-link" data-view="v1e">Open tree →</a>
+          </div>
+        </div>
+
+        <div class="ov-card phase-active">
+          <div class="ov-header">
+            <span class="phase-badge active">ACTIVE</span>
+            <span class="ov-age">last activity 3d ago</span>
+          </div>
+          <div class="ov-intent">Q2 team infrastructure migration</div>
+          <div class="ov-progress">
+            <div class="progress-bar"><div class="progress-fill" style="width:15%"></div></div>
+            <div class="ov-progress-label">own 15% · rollup 12%</div>
+          </div>
+          <div class="ov-stats">
+            <b>5</b> sub-goals · <b>8</b> runs · <b>0</b> in-flight
+          </div>
+          <div class="ov-next">
+            <span class="k">Next attention</span>
+            Stale: no activity in 3 days. Likely blocked on external dependency (cloud provisioning). Human decision required.
+          </div>
+          <div class="ov-footer">
+            <div class="flags"><span class="flag blocker">!</span></div>
+            <a class="tree-link" data-view="v1e">Open tree →</a>
+          </div>
+        </div>
+
+        <div class="ov-card phase-archived">
+          <div class="ov-header">
+            <span class="phase-badge archived">ARCHIVED</span>
+            <span class="ov-age">archived 14d ago</span>
+          </div>
+          <div class="ov-intent">Notion clone proposal (v0 direction)</div>
+          <div class="ov-progress">
+            <div class="progress-bar"></div>
+            <div class="ov-progress-label">— superseded</div>
+          </div>
+          <div class="ov-stats">
+            <b>0</b> active sub-goals · archived_reason: superseded by v6 direction
+          </div>
+          <div class="ov-next">
+            <span class="k">Next attention</span>
+            None. Kept for audit.
+          </div>
+          <div class="ov-footer">
+            <div class="flags"></div>
+            <a class="tree-link" data-view="v1e">Open tree (read-only) →</a>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Logic notes</div>
+        <ul>
+          <li><b>Overview shows only depth 0.</b> Top-level Objectives are the only things on this screen. Descendants are invisible here on purpose. You are making priority decisions at the Objective level, not execution decisions at the leaf level.</li>
+          <li><b>Each card answers one question: "should I pay attention to this now?"</b> That is why every card has a <code>Next attention</code> field driven by the State Layer's <code>next_step</code> computation. The overview is prescriptive, not just descriptive.</li>
+          <li><b>No hierarchy is drawn at this level.</b> Multiple top-level Objectives are parallel, not siblings under a virtual root. We removed the virtual-root idea; drawing one would misrepresent the workspace structure.</li>
+          <li><b>Rollup state leaks up from descendants.</b> The "Build OKR Dashboard" card shows <code>rollup 38%</code> and <code>(!)</code> and <code>(?)</code> flags even though its own progress is 42% and its own state is fine. The blockers and review flags live on descendants; the overview surfaces them so you see "this Objective has attention needs" without drilling in.</li>
+          <li><b>"Open tree →" is the only navigation action on this card.</b> Everything else (edit intent, edit acceptance, trigger Run, approve) happens in focused views (Objective tree → Node panel).</li>
+        </ul>
+        <div class="notes-title" style="margin-top:14px">What this view does NOT show</div>
+        <ul>
+          <li>Sub-goal details. You only see the count.</li>
+          <li>Individual Run status. You only see "1 in-flight" aggregated.</li>
+          <li>Acceptance criteria. You only see the aggregated progress percentage.</li>
+          <li>Structural hierarchy between Objectives. There intentionally is none to show.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §14 (progressive disclosure). <b>This view refines the locked model:</b> what we called "Layer 0" in the foundations doc is actually two sub-views — Workspace Overview (this view) and Objective Tree (view 2). The foundations §14 text should be updated to reflect the split. Task #14.
+      </div>
+    </section>
+
+    <!-- ========== V1e: Objective tree (focused) ========== -->
+    <section class="view" id="v1e">
+      <header class="view-header">
+        <div class="view-kicker">View 2 · Intent Layer · focused</div>
+        <h2 class="view-title">Objective tree — focused view</h2>
+        <p class="view-subtitle">
+          Opened by clicking an Objective from the Workspace overview.
+          Shows one Objective at the top with all its descendants as a
+          top-down tree. Parent above, children below, connected by lines.
+        </p>
+      </header>
+
+      <div class="focus-breadcrumb">
+        <a data-view="v1f">← Workspace overview</a>
+        &nbsp;/&nbsp;
+        <b>Build OKR Dashboard product</b>
+        &nbsp;&nbsp;<span class="muted">focus depth: full tree (all descendants)</span>
+      </div>
+
+      <div class="wire">
+        <div class="wire-title">Dashboard home — top-down tree, 8 Nodes across 4 depths</div>
+
+        <div class="tree-td-wrap">
+          <ul class="tree-td">
+            <li>
+              <!-- Depth 0: root -->
+              <div class="node-body phase-active">
+                <div class="n-title">Build OKR Dashboard product</div>
+                <div class="n-meta">own 42% · rollup 38% · 3 children</div>
+                <div class="n-bar"><div style="width:42%"></div></div>
+                <div class="n-badges">
+                  <span class="phase-badge active">ACTIVE</span>
+                  <span class="flag rollup">!</span>
+                </div>
+              </div>
+
+              <ul>
+                <!-- Depth 1 · first -->
+                <li>
+                  <div class="node-body phase-active">
+                    <div class="n-title">Write tech spec foundations</div>
+                    <div class="n-meta">own 85% · 2 children</div>
+                    <div class="n-bar"><div style="width:85%"></div></div>
+                    <div class="n-badges">
+                      <span class="phase-badge active">ACTIVE</span>
+                      <span class="flag review">?</span>
+                    </div>
+                  </div>
+
+                  <ul>
+                    <!-- Depth 2 · first under "Write tech spec" -->
+                    <li>
+                      <div class="node-body phase-review">
+                        <div class="n-title">Validate Fork-Return-Synthesize</div>
+                        <div class="n-meta">own 95% · 2 children</div>
+                        <div class="n-bar"><div style="width:95%"></div></div>
+                        <div class="n-badges">
+                          <span class="phase-badge review">IN-REVIEW</span>
+                          <span class="flag review">?</span>
+                        </div>
+                      </div>
+
+                      <ul>
+                        <!-- Depth 3 · leaves -->
+                        <li>
+                          <div class="node-body phase-draft">
+                            <div class="n-title">Doc parent synth format</div>
+                            <div class="n-meta">— prose</div>
+                            <div class="n-bar"></div>
+                            <div class="n-badges">
+                              <span class="phase-badge draft">DRAFT</span>
+                              <span></span>
+                            </div>
+                          </div>
+                        </li>
+                        <li>
+                          <div class="node-body phase-complete">
+                            <div class="n-title">Sub-Run scratchpad isolation</div>
+                            <div class="n-meta">100% · validated</div>
+                            <div class="n-bar"><div class="complete" style="width:100%"></div></div>
+                            <div class="n-badges">
+                              <span class="phase-badge complete">COMPLETE</span>
+                              <span></span>
+                            </div>
+                          </div>
+                        </li>
+                      </ul>
+                    </li>
+
+                    <!-- Depth 2 · second under "Write tech spec" -->
+                    <li>
+                      <div class="node-body phase-complete">
+                        <div class="n-title">Architectural invariant locked</div>
+                        <div class="n-meta">100%</div>
+                        <div class="n-bar"><div class="complete" style="width:100%"></div></div>
+                        <div class="n-badges">
+                          <span class="phase-badge complete">COMPLETE</span>
+                          <span></span>
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </li>
+
+                <!-- Depth 1 · second: Design Node CRUD API -->
+                <li>
+                  <div class="node-body phase-draft">
+                    <div class="n-title">Design Node CRUD API</div>
+                    <div class="n-meta">— prose</div>
+                    <div class="n-bar"></div>
+                    <div class="n-badges">
+                      <span class="phase-badge draft">DRAFT</span>
+                      <span></span>
+                    </div>
+                  </div>
+                </li>
+
+                <!-- Depth 1 · third: State Layer recomputation -->
+                <li>
+                  <div class="node-body phase-active">
+                    <div class="n-title">State Layer recomputation</div>
+                    <div class="n-meta">own 30% · blocked</div>
+                    <div class="n-bar"><div style="width:30%"></div></div>
+                    <div class="n-badges">
+                      <span class="phase-badge active">ACTIVE</span>
+                      <span class="flag blocker">!</span>
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </div>
+
+        <div class="tiny muted" style="margin-top:12px;text-align:center">
+          The same 8 Nodes rendered with one single root ("Build OKR
+          Dashboard"). Hierarchy is unambiguous: parent sits above children,
+          children hang off a horizontal bar under the parent.
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Why this view</div>
+        <ul>
+          <li><b>Visual metaphor matches the word.</b> When you say "we're drawing a tree" you now literally draw a tree. No translation between mental model and visual model.</li>
+          <li><b>Parent-child direction is unambiguous.</b> Up is parent, down is child. No indent counting, no rail colors, no column numbers. Spatial relationship IS semantic relationship.</li>
+          <li><b>Depth equals vertical row.</b> Every Node at depth N sits at the same horizontal plane. Siblings line up naturally.</li>
+          <li><b>Single-root only.</b> This view is entered by clicking ONE Objective in the Workspace Overview. It draws that Objective's tree, nothing else. Multiple parallel Objectives are handled by going back to Overview and clicking a different one — they never share a tree.</li>
+          <li><b>Breadcrumb anchors the focus.</b> The "← Workspace overview / <b>Build OKR Dashboard</b>" strip tells the user exactly where they are and how to get back.</li>
+        </ul>
+        <div class="notes-title" style="margin-top:14px">Honest tradeoffs</div>
+        <ul>
+          <li><b>Breadth is the real limit, not depth.</b> A node with 12 children at one level pushes the tree horizontally very wide. Mitigations: compact cards, collapse rarely-touched branches by default, horizontal scroll inside <code>.tree-td-wrap</code> (which is already enabled).</li>
+          <li><b>Card size is constrained</b> (~210-240px wide) so the tree doesn't explode. Fits intent + 1 meta line + 1 progress bar + 1 badge row. For anything more, click the card → Layer 1 Panel.</li>
+          <li><b>Deep asymmetric trees look lopsided.</b> If one branch is depth 5 and its siblings are leaves, the layout has big empty columns. This is correct — empty space is honest about "nothing happening here" — but it can feel sparse.</li>
+          <li><b>For "100+ Nodes fully expanded" use cases this still overwhelms</b>, just like any visualization. The fix is progressive collapse (click a card to collapse its subtree), not a different layout.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §3 (three-layer model) · §6 (phases) · §14 (progressive disclosure). Task #14. Visual inspiration: org charts, Unix <code>tree</code> command rotated 90°, the literal word "tree."
+      </div>
+    </section>
+
+    <!-- ========== V2: Node panel (action-first redesign) ========== -->
+    <section class="view" id="v2">
+      <header class="view-header">
+        <div class="view-kicker">View 3 · Level 2 · Node panel</div>
+        <h2 class="view-title">Node panel — action first, data on demand</h2>
+        <p class="view-subtitle">
+          The user comes here to DO something, not to READ data. Actions
+          are at the top. Data is collapsed by default. Notifications
+          surface only when the system has something to say. Two examples
+          below: one with attention needed, one calm.
+        </p>
+      </header>
+
+      <!-- ===== Example A: IN-REVIEW with blocker notification ===== -->
+      <div class="wire">
+        <div class="wire-title">Example A — attention needed (IN-REVIEW, blocker flagged)</div>
+
+        <div class="panel" style="max-width:600px">
+
+          <div class="panel-breadcrumb">
+            <a data-view="v1f">Workspace</a> &nbsp;/&nbsp;
+            <a data-view="v1e">Build OKR Dashboard</a> &nbsp;/&nbsp;
+            Write tech spec &nbsp;/&nbsp;
+            <b style="color:var(--text)">Validate Fork-Return-Synthesize</b>
+          </div>
+
+          <!-- Header: intent + minimal context -->
+          <div class="panel-header">
+            <div class="panel-intent">
+              Validate that Fork-Return-Synthesize converges across parallel sub-Runs
+            </div>
+            <div class="panel-meta">
+              <span class="phase-badge review">IN-REVIEW</span>
+              <div class="progress-bar" style="flex:1;max-width:200px"><div class="progress-fill" style="width:95%"></div></div>
+              <span class="muted" style="font-family:var(--mono);font-size:12px">95%</span>
+            </div>
+          </div>
+
+          <!-- Notification banner -->
+          <div class="notif-banner">
+            <div class="notif-icon">
+              <span class="flag review">?</span>
+            </div>
+            <div>
+              <div class="notif-title">Agent needs your decision</div>
+              <div class="notif-body">Run-P-2 completed synthesis. Evidence density score is 7.2, below the priority threshold of 8.5. Review the output and decide: approve as-is or reject for another iteration.</div>
+            </div>
+          </div>
+
+          <!-- PRIMARY ACTION AREA -->
+          <div class="action-area">
+            <div class="action-label">What do you want to do?</div>
+
+            <!-- Phase-specific primary actions -->
+            <div class="primary-btns">
+              <button class="btn-xl approve">Approve synthesis</button>
+              <button class="btn-xl reject">Reject and re-run</button>
+            </div>
+
+            <!-- Agent interaction -->
+            <div class="tell-agent-row">
+              <span class="tell-agent-label">Tell agent</span>
+              <input type="text" class="tell-agent-input" disabled placeholder="e.g. 'focus on improving evidence density before I approve'">
+              <button class="tell-agent-send">Send</button>
+            </div>
+
+            <!-- Secondary actions -->
+            <div class="secondary-links">
+              <a>Edit goal</a>
+              <a>Edit acceptance</a>
+              <a>Edit policy</a>
+              <a>Add sub-goal</a>
+              <a>Add note</a>
+              <a>Archive</a>
+            </div>
+          </div>
+
+          <!-- COLLAPSED DATA SECTIONS -->
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Acceptance criteria</span>
+            <span class="accordion-summary">3 assertions PASS · 2 metrics MET · rubric avg 7.9</span>
+          </div>
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Runs</span>
+            <span class="accordion-summary">5 total · 0 in-flight · latest: Run-P-2 (synthesis, completed)</span>
+          </div>
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Sub-goals</span>
+            <span class="accordion-summary">2 children · 1 complete, 1 draft</span>
+          </div>
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Policy</span>
+            <span class="accordion-summary">20k tokens · read+code · stakes normal</span>
+          </div>
+          <div class="accordion-row" style="border-bottom:none">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> History</span>
+            <span class="accordion-summary">4 events · last: agent flagged synthesis ready (2h ago)</span>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ===== Example B: ACTIVE, calm state, no notifications ===== -->
+      <div class="wire" style="margin-top:28px">
+        <div class="wire-title">Example B — calm state (ACTIVE, no issues, agents working)</div>
+
+        <div class="panel" style="max-width:600px">
+
+          <div class="panel-breadcrumb">
+            <a data-view="v1f">Workspace</a> &nbsp;/&nbsp;
+            <a data-view="v1e">Build OKR Dashboard</a> &nbsp;/&nbsp;
+            <b style="color:var(--text)">State Layer recomputation</b>
+          </div>
+
+          <div class="panel-header">
+            <div class="panel-intent">
+              State Layer recomputation engine
+            </div>
+            <div class="panel-meta">
+              <span class="phase-badge active">ACTIVE</span>
+              <div class="progress-bar" style="flex:1;max-width:200px"><div class="progress-fill" style="width:30%"></div></div>
+              <span class="muted" style="font-family:var(--mono);font-size:12px">30%</span>
+              <span class="muted" style="font-size:12px">· 1 run in-flight</span>
+            </div>
+          </div>
+
+          <!-- NO notification banner — calm state -->
+
+          <div class="action-area">
+            <div class="action-label">What do you want to do?</div>
+
+            <div class="primary-btns">
+              <button class="btn-xl trigger">Trigger new Run</button>
+              <button class="btn-xl stop">Stop current Run</button>
+            </div>
+
+            <div class="tell-agent-row">
+              <span class="tell-agent-label">Tell agent</span>
+              <input type="text" class="tell-agent-input" disabled placeholder="e.g. 'prioritize incremental rollup over full recomputation'">
+              <button class="tell-agent-send">Send</button>
+            </div>
+
+            <div class="secondary-links">
+              <a>Edit goal</a>
+              <a>Edit acceptance</a>
+              <a>Edit policy</a>
+              <a>Add sub-goal</a>
+              <a>Add note</a>
+              <a>Archive</a>
+            </div>
+          </div>
+
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Acceptance criteria</span>
+            <span class="accordion-summary">2 assertions · 1 metric · 2 rubric dims</span>
+          </div>
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Runs</span>
+            <span class="accordion-summary">3 total · 1 in-flight</span>
+          </div>
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Sub-goals</span>
+            <span class="accordion-summary">0 children</span>
+          </div>
+          <div class="accordion-row">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> Policy</span>
+            <span class="accordion-summary">10k tokens · read+code · normal</span>
+          </div>
+          <div class="accordion-row" style="border-bottom:none">
+            <span class="accordion-label"><span class="chevron-icon">▸</span> History</span>
+            <span class="accordion-summary">2 events · last: Run dispatched (45min ago)</span>
+          </div>
+
+          <div class="calm-footer">
+            All quiet. Agent is working. You'll be notified if attention is needed.
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Design principles (action-first)</div>
+        <ul>
+          <li><b>Actions are the dominant element.</b> The big colored buttons ("Approve" / "Reject" / "Trigger Run") are the first thing the user sees after the intent. Data exists to support action decisions, not as an end in itself.</li>
+          <li><b>"Tell agent" is always present.</b> The user can type a free-form instruction to the agent at any time. This is the primary human-agent interaction surface. It replaces the old "trigger Run with angle" pattern with a natural language input.</li>
+          <li><b>Notification banner appears only when the system has something to say.</b> In the calm state (Example B), there is no banner at all. The panel feels empty, which is the correct feeling — it means "nothing needs your attention, the agent is working."</li>
+          <li><b>All data sections are collapsed by default.</b> The one-line summary on each collapsed row (e.g. "3 assertions PASS · 2 metrics MET") gives enough context without expanding. Power users expand; regular users never need to.</li>
+          <li><b>Secondary actions are text links, not buttons.</b> "Edit goal", "Edit acceptance", etc. are de-emphasized because they are infrequent contract-change operations, not the primary workflow.</li>
+          <li><b>The calm footer ("All quiet. Agent is working.") is intentional UX.</b> It tells the user "you don't need to do anything right now" and gives permission to walk away. This is the opposite of a dashboard that always screams for attention.</li>
+        </ul>
+      </div>
+
+      <div class="notes" style="background:var(--warn-bg);border-left-color:var(--warn-mid)">
+        <div class="notes-title" style="color:var(--warn)">What changed from the old dense panel</div>
+        <ul>
+          <li><b>Before:</b> 10 sections all expanded, acceptance details fully rendered, 10+ action buttons visible, information overload.</li>
+          <li><b>After:</b> intent + progress bar + notification (if any) + 2-3 primary action buttons + agent chat input + 5 collapsed data rows. The panel is 60% shorter.</li>
+          <li><b>The rule:</b> if the user has to read more than 3 seconds to figure out what to do next, the panel failed. The notification banner + primary actions should answer that question instantly.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §13 (agent/human default split) · §14 (progressive disclosure). Task #6 (UX philosophy). Key insight from this iteration: Level 2 is the ACTION surface, not the DATA surface. Data is on-demand, actions are always-visible.
+      </div>
+    </section>
+
+    <!-- ========== V3: Layer 2 drill-down ========== -->
+    <section class="view" id="v3">
+      <header class="view-header">
+        <div class="view-kicker">View 3 · Execution Layer visibility</div>
+        <h2 class="view-title">Layer 2 — drill into a single Run</h2>
+        <p class="view-subtitle">
+          Opened from Layer 1 when the user wants to audit a specific
+          execution. Everything visible here is what's required to replay or
+          re-review that Run.
+        </p>
+      </header>
+
+      <div class="wire">
+        <div class="wire-title">Layer 1 still visible behind; Layer 2 is overlay</div>
+
+        <div class="overlay">
+          <div class="overlay-header">
+            <div class="overlay-title">Run-P-2 · synthesis · completed</div>
+            <button class="btn">close (back to Layer 1)</button>
+          </div>
+
+          <div class="overlay-section">
+            <div class="panel-section-title">Identity</div>
+            <div class="kv"><span class="k">run_id</span><span style="font-family:var(--mono);font-size:11px">run_7f3a21e9</span></div>
+            <div class="kv"><span class="k">node_id</span><span style="font-family:var(--mono);font-size:11px">node_validate_frs</span></div>
+            <div class="kv"><span class="k">parent_run_id</span><span style="font-family:var(--mono);font-size:11px">run_2c14bb10 (Run-P-1, aborted)</span></div>
+            <div class="kv"><span class="k">type</span><span style="font-family:var(--mono);font-size:11px">synthesis</span></div>
+            <div class="kv"><span class="k">runtime</span><span style="font-family:var(--mono);font-size:11px">codex</span></div>
+            <div class="kv"><span class="k">state</span><span style="font-family:var(--mono);font-size:11px">completed</span></div>
+            <div class="kv"><span class="k">dispatched_at</span><span style="font-family:var(--mono);font-size:11px">2026-04-10 14:32:01</span></div>
+            <div class="kv"><span class="k">terminated_at</span><span style="font-family:var(--mono);font-size:11px">2026-04-10 15:18:04</span></div>
+          </div>
+
+          <div class="overlay-section">
+            <div class="panel-section-title">Input snapshot (frozen at dispatch)</div>
+            <div class="kv"><span class="k">intent_snapshot</span><span style="font-size:12px">"Validate Fork-Return-Synthesize converges across parallel sub-Runs without canonical artifact conflicts."</span></div>
+            <div class="kv"><span class="k">acceptance_snapshot</span><span style="font-family:var(--mono);font-size:11px">structured v2 (3 assertions · 2 metrics · 3 rubric dims)</span></div>
+            <div class="kv"><span class="k">effective_policy</span><span style="font-family:var(--mono);font-size:11px">20k tokens · 1200s wallclock · read+code · stakes normal</span></div>
+            <div class="kv"><span class="k">parent_context</span><span style="font-family:var(--mono);font-size:11px">[ancestor-summary-1.md, ancestor-summary-2.md]</span></div>
+            <div class="kv"><span class="k">angle</span><span style="font-family:var(--mono);font-size:11px">null (primary Run)</span></div>
+            <div class="kv"><span class="k">budget</span><span style="font-family:var(--mono);font-size:11px">tokens 20000 · iters 10 · wallclock 1200</span></div>
+            <div class="kv"><span class="k">tool_permissions</span><span style="font-family:var(--mono);font-size:11px">[read, code, dispatch_sub_run]</span></div>
+          </div>
+
+          <div class="overlay-section">
+            <div class="panel-section-title">Output (terminal)</div>
+            <div class="kv"><span class="k">findings</span><span style="font-size:12px">"Synthesized 3 sub-Run artifacts. Evidence density lifted 7.1→8.4 but still 0.1 below priority threshold. Recommend human review before advance."</span></div>
+            <div class="kv"><span class="k">concerns</span><span style="font-size:12px">[1] "sub-Run-C diverged on 'canonical_updates' terminology; normalized."<br>[2] "evidence_density rubric still below 8.5 priority threshold."</span></div>
+            <div class="kv"><span class="k">confidence</span><span style="font-family:var(--mono);font-size:11px">0.82</span></div>
+            <div class="kv"><span class="k" style="color:var(--warn)">needs_human_review</span><span style="color:var(--warn);font-family:var(--mono);font-size:11px;font-weight:600">TRUE</span></div>
+            <div class="kv"><span class="k">canonical_updates</span><span style="font-family:var(--mono);font-size:11px">[patch-1.diff, patch-2.diff]</span></div>
+            <div class="kv"><span class="k">termination_reason</span><span style="font-family:var(--mono);font-size:11px">success</span></div>
+          </div>
+
+          <div class="overlay-section">
+            <div class="panel-section-title">Spawned sub-Runs (3)</div>
+            <div class="tl-row" style="grid-template-columns:100px 1fr 80px 120px">
+              <span class="tl-time">sub-Run-A</span>
+              <span style="font-size:12px">angle: "fundamentals of Claude Code sub-agent mechanics"</span>
+              <span class="run-state ok">completed</span>
+              <span class="muted" style="font-size:12px">drill in →</span>
+            </div>
+            <div class="tl-row" style="grid-template-columns:100px 1fr 80px 120px">
+              <span class="tl-time">sub-Run-B</span>
+              <span style="font-size:12px">angle: "edge cases when sub-Runs diverge on terminology"</span>
+              <span class="run-state ok">completed</span>
+              <span class="muted" style="font-size:12px">drill in →</span>
+            </div>
+            <div class="tl-row" style="grid-template-columns:100px 1fr 80px 120px">
+              <span class="tl-time">sub-Run-C</span>
+              <span style="font-size:12px">angle: "counter-evidence from Temporal / Airflow mechanics"</span>
+              <span class="run-state warn">completed · flagged</span>
+              <span class="muted" style="font-size:12px">drill in →</span>
+            </div>
+          </div>
+
+          <div class="overlay-section">
+            <div class="panel-section-title">Audit trail</div>
+            <div class="timeline-item"><span class="ts">14:32:01</span><span class="act">dispatched</span> (input frozen)</div>
+            <div class="timeline-item"><span class="ts">14:32:15</span><span class="act">tool_call</span> read_docs(acceptance_snapshot)</div>
+            <div class="timeline-item"><span class="ts">14:33:02</span><span class="act">tool_call</span> dispatch_sub_run(angle=fundamentals) → sub-Run-A</div>
+            <div class="timeline-item"><span class="ts">14:33:02</span><span class="act">tool_call</span> dispatch_sub_run(angle=edge_cases) → sub-Run-B</div>
+            <div class="timeline-item"><span class="ts">14:33:02</span><span class="act">tool_call</span> dispatch_sub_run(angle=counter_evidence) → sub-Run-C</div>
+            <div class="timeline-item"><span class="ts">14:58:11</span><span class="act">sub_run_returned</span> sub-Run-A (findings 2.3KB)</div>
+            <div class="timeline-item"><span class="ts">15:02:33</span><span class="act">sub_run_returned</span> sub-Run-B (findings 1.8KB)</div>
+            <div class="timeline-item"><span class="ts">15:07:19</span><span class="act">sub_run_returned</span> sub-Run-C (findings 2.1KB, needs_human_review=true)</div>
+            <div class="timeline-item"><span class="ts">15:08:04</span><span class="act">reasoning</span> "A and B agree on core claim; C's flag promoted to Node level"</div>
+            <div class="timeline-item"><span class="ts">15:12:51</span><span class="act">tool_call</span> write_synthesis(patch-1.diff, patch-2.diff)</div>
+            <div class="timeline-item"><span class="ts">15:18:04</span><span class="act">terminated</span> success · frozen output</div>
+          </div>
+
+          <div class="overlay-section">
+            <div class="panel-section-title">Scratchpad (read-only)</div>
+            <div class="policy-line mono">/runs/.../node_validate_frs/Run-P-2/synthesis.md</div>
+            <div class="policy-line mono">/runs/.../node_validate_frs/Run-P-2/reasoning-log.md</div>
+            <div class="policy-line mono">/runs/.../node_validate_frs/Run-P-2/patch-1.diff</div>
+            <div class="policy-line mono">/runs/.../node_validate_frs/Run-P-2/patch-2.diff</div>
+            <div class="policy-line mono" style="color:var(--text-faint)">/runs/.../node_validate_frs/sub-A/ · /sub-B/ · /sub-C/</div>
+          </div>
+
+          <div class="overlay-section">
+            <div class="btn-row">
+              <button class="btn">Export Run</button>
+              <button class="btn">Tag as reference</button>
+              <button class="btn">Dispatch reconcile Run</button>
+              <button class="btn disabled">Edit intent (disabled)</button>
+              <button class="btn disabled">Edit acceptance (disabled)</button>
+            </div>
+            <div class="locked-banner">
+              Layer 2 cannot modify contract. To edit intent / acceptance / local_policy, close this overlay and use Layer 1.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Logic notes</div>
+        <ul>
+          <li><b>Input is a deep snapshot, not a live pointer</b>. Opening this Run 3 months later shows exactly what contract it was working against. Reproducibility at the data level.</li>
+          <li><b>Sub-Runs are reachable here</b> — but this is the drill-down path, not the default. Layer 0 and Layer 1 hide them entirely.</li>
+          <li><b>Audit trail is append-only and frozen at termination</b>. Tampering with it would break the tracing contract.</li>
+          <li><b>Contract-edit buttons are disabled, not hidden</b>. Disabling (not hiding) teaches users the rule explicitly.</li>
+          <li><b>"Dispatch reconcile Run" is the escape hatch</b> when audit reveals the Run was based on a stale contract.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §10 (Run dispatch contract) · §11 (contract reconcile) · §14 (Layer 2 must enable replay). Task #15.
+      </div>
+    </section>
+
+    <!-- ========== V4: User journey — 4 progressive disclosure levels ========== -->
+    <section class="view" id="v4">
+      <header class="view-header">
+        <div class="view-kicker">View 5 · Progressive disclosure</div>
+        <h2 class="view-title">The user journey — 4 levels</h2>
+        <p class="view-subtitle">
+          The complete dashboard flow. Each level narrows the unit of
+          attention. Contract edits are allowed at exactly one level
+          (Level 2 · Node panel). Click "See this view →" to jump to
+          any level's full wireframe.
+        </p>
+      </header>
+
+      <div class="wire">
+        <div class="wire-title">Four levels — click through any card to jump to its full wireframe</div>
+
+        <div class="flow-journey">
+
+          <div class="flow-level">
+            <div class="flow-level-num">Level 0</div>
+            <div class="flow-level-name">Workspace overview</div>
+            <div class="flow-level-desc"><b>Unit:</b> entire portfolio<br><b>Depth:</b> 0 only (flat)<br><b>Layout:</b> card grid<br><b>Contract edits:</b> no</div>
+            <div class="flow-level-sketch">
+              <div style="border:1px solid var(--border);padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-alt);border-left:3px solid var(--phase-active)">
+                <div style="font-size:10.5px;font-weight:600;color:var(--text)">Build OKR Dashboard</div>
+                <div style="font-family:var(--mono);font-size:9.5px;color:var(--text-dim);margin-top:2px">ACTIVE · 42% · 3 sub · (!)</div>
+                <div style="font-size:9px;color:var(--text-faint);margin-top:3px;font-style:italic">Next: review synthesis</div>
+              </div>
+              <div style="border:1px solid var(--border);padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-alt);border-left:3px solid var(--phase-active)">
+                <div style="font-size:10.5px;font-weight:600;color:var(--text)">Research v6</div>
+                <div style="font-family:var(--mono);font-size:9.5px;color:var(--text-dim);margin-top:2px">ACTIVE · 60%</div>
+              </div>
+              <div style="border:1px solid var(--border);padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-alt);opacity:0.5;border-left:3px solid var(--phase-archived)">
+                <div style="font-size:10.5px;font-weight:600;color:var(--text)">Notion clone</div>
+                <div style="font-family:var(--mono);font-size:9.5px;color:var(--text-dim);margin-top:2px">ARCHIVED</div>
+              </div>
+            </div>
+            <div class="flow-question">"What should I look at?"</div>
+            <a class="btn primary" data-view="v1f" style="display:block;text-align:center;text-decoration:none;font-size:11px">See this view →</a>
+          </div>
+
+          <div class="flow-arrow-col">→</div>
+
+          <div class="flow-level">
+            <div class="flow-level-num">Level 1</div>
+            <div class="flow-level-name">Objective tree</div>
+            <div class="flow-level-desc"><b>Unit:</b> single Objective tree<br><b>Depth:</b> all descendants<br><b>Layout:</b> top-down tree<br><b>Contract edits:</b> no</div>
+            <div class="flow-level-sketch" style="text-align:center">
+              <div style="display:inline-block;border:1px solid var(--accent-mid);padding:5px 8px;border-radius:6px;border-left:3px solid var(--phase-active);margin-bottom:4px;font-size:9.5px;font-weight:600;color:var(--text);background:var(--accent-bg)">Build OKR Dashboard</div>
+              <div style="color:var(--border-hi);font-size:14px;line-height:1">│</div>
+              <div style="display:flex;gap:4px;justify-content:center;margin-top:2px">
+                <div style="border:1px solid var(--border);padding:4px 6px;border-radius:5px;font-size:9px;border-left:2px solid var(--phase-active);color:var(--text)">Write spec</div>
+                <div style="border:1px solid var(--border);padding:4px 6px;border-radius:5px;font-size:9px;border-left:2px solid var(--phase-draft);color:var(--text)">Design API</div>
+                <div style="border:1px solid var(--border);padding:4px 6px;border-radius:5px;font-size:9px;border-left:2px solid var(--phase-active);color:var(--text)">State Layer</div>
+              </div>
+            </div>
+            <div class="flow-question">"What's the structure?"</div>
+            <a class="btn primary" data-view="v1e" style="display:block;text-align:center;text-decoration:none;font-size:11px">See this view →</a>
+          </div>
+
+          <div class="flow-arrow-col">→</div>
+
+          <div class="flow-level highlighted">
+            <div class="flow-level-num">Level 2 (contract surface)</div>
+            <div class="flow-level-name">Node panel</div>
+            <div class="flow-level-desc"><b>Unit:</b> single Node<br><b>Shows:</b> acceptance, runs, policy<br><b>Layout:</b> detail panel<br><b class="accent">Contract edits: YES</b></div>
+            <div class="flow-level-sketch" style="font-size:10px">
+              <div style="border:1px solid var(--accent-mid);padding:8px;border-radius:6px;background:var(--bg)">
+                <div style="font-weight:600;margin-bottom:4px;color:var(--text)">Validate FRS</div>
+                <div style="font-family:var(--mono);font-size:9.5px;color:var(--text-dim);margin-bottom:4px">IN-REVIEW · 95%</div>
+                <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px">assertions: 3/3 PASS<br>metrics: 2/2 target<br>rubric: evidence 7.2/8.5</div>
+                <div style="display:flex;gap:4px">
+                  <span style="font-family:var(--mono);color:var(--success);border:1px solid var(--success-mid);padding:1px 5px;border-radius:4px;font-size:9px;background:var(--success-bg)">Approve</span>
+                  <span style="font-family:var(--mono);color:var(--error);border:1px solid #fca5a5;padding:1px 5px;border-radius:4px;font-size:9px;background:var(--error-bg)">Reject</span>
+                  <span style="font-family:var(--mono);color:var(--accent);border:1px solid var(--accent-mid);padding:1px 5px;border-radius:4px;font-size:9px;background:var(--accent-bg)">Edit</span>
+                </div>
+              </div>
+            </div>
+            <div class="flow-question" style="color:var(--accent)">"What should I change?"</div>
+            <a class="btn primary" data-view="v2" style="display:block;text-align:center;text-decoration:none;font-size:11px">See this view →</a>
+          </div>
+
+          <div class="flow-arrow-col">→</div>
+
+          <div class="flow-level">
+            <div class="flow-level-num">Level 3</div>
+            <div class="flow-level-name">Run detail</div>
+            <div class="flow-level-desc"><b>Unit:</b> single Run<br><b>Shows:</b> input, output, audit trail<br><b>Layout:</b> overlay<br><b>Contract edits:</b> no (disabled)</div>
+            <div class="flow-level-sketch" style="font-size:10px">
+              <div style="border:1px solid var(--border);padding:8px;border-radius:6px;background:var(--bg-alt)">
+                <div style="font-weight:600;margin-bottom:4px;color:var(--text)">Run-P-2 · synthesis</div>
+                <div style="font-family:var(--mono);font-size:9.5px;color:var(--text-dim);margin-bottom:4px">completed · 46 min</div>
+                <div style="font-family:var(--mono);font-size:9px;color:var(--text-faint)">input: frozen snapshot<br>output: findings + concerns<br>sub-runs: 3 (drill-in)</div>
+                <div style="margin-top:5px;display:flex;gap:4px">
+                  <span style="font-family:var(--mono);color:var(--text-faint);border:1px solid var(--border);padding:1px 4px;border-radius:3px;font-size:9px">Export</span>
+                  <span style="font-family:var(--mono);color:var(--text-faint);border:1px solid var(--border);padding:1px 4px;border-radius:3px;font-size:9px;opacity:0.4">Edit (no)</span>
+                </div>
+              </div>
+            </div>
+            <div class="flow-question">"What happened?"</div>
+            <a class="btn primary" data-view="v3" style="display:block;text-align:center;text-decoration:none;font-size:11px">See this view →</a>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="wire" style="margin-top:24px">
+        <div class="wire-title">Level comparison table</div>
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>Level</th>
+              <th>Unit of attention</th>
+              <th>Contract edits?</th>
+              <th>Runs visible?</th>
+              <th>Core question</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>0 · Workspace</td>
+              <td>Entire portfolio</td>
+              <td>No</td>
+              <td>Counts only</td>
+              <td>"What should I look at?"</td>
+            </tr>
+            <tr>
+              <td>1 · Objective tree</td>
+              <td>One Objective + descendants</td>
+              <td>No (click node → Level 2)</td>
+              <td>Counts only</td>
+              <td>"What's the structure?"</td>
+            </tr>
+            <tr class="highlighted-row">
+              <td>2 · Node panel</td>
+              <td><b>One Node</b></td>
+              <td><b style="color:var(--accent)">YES</b></td>
+              <td>Summary list</td>
+              <td><b>"What should I change?"</b></td>
+            </tr>
+            <tr>
+              <td>3 · Run detail</td>
+              <td>One Run</td>
+              <td>No (disabled)</td>
+              <td>Full forensic</td>
+              <td>"What happened?"</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Logic notes</div>
+        <ul>
+          <li><b>Each level narrows attention by one order.</b> Portfolio → tree → node → run. You never jump two levels.</li>
+          <li><b>Contract edits at exactly ONE level (Level 2).</b> Every other level is read-only or navigation-only. Single audit surface.</li>
+          <li><b>Levels 0 and 1 are scanning views</b> (decide WHERE to focus). <b>Levels 2 and 3 are working views</b> (ACT on or UNDERSTAND a specific thing).</li>
+          <li><b>Navigation is one-level jumps.</b> Overview → click → Tree → click node → Panel → click run → Detail. Breadcrumbs at every level let you jump back up.</li>
+          <li><b>This is 4 levels, not the original 3.</b> The original foundations doc described 3 render layers. This discussion revealed that "Layer 0" was actually two views (Workspace overview + Objective tree). Foundations §14 should be updated.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §14 (needs update from 3 to 4 levels). Task #14.
+      </div>
+    </section>
+
+    <!-- ========== V5: 5 phases ========== -->
+    <section class="view" id="v5">
+      <header class="view-header">
+        <div class="view-kicker">View 5 · Node lifecycle</div>
+        <h2 class="view-title">Five phases and their transitions</h2>
+        <p class="view-subtitle">
+          A Node walks through phases. Each phase determines what Run
+          types are legal, what actions are visible, and what the State
+          Layer returns for progress.
+        </p>
+      </header>
+
+      <div class="phases-row">
+        <div class="phase-box draft">
+          <h4>Draft</h4>
+          <div class="label">acceptance</div>
+          <ul><li>prose</li></ul>
+          <div class="label">Runs allowed</div>
+          <ul><li>exploration only</li></ul>
+          <div class="label">progress</div>
+          <ul><li>— none (prose)</li></ul>
+          <div class="label">actions</div>
+          <ul>
+            <li>edit intent</li>
+            <li>edit prose accept</li>
+            <li>trigger exploration</li>
+            <li>freeze → Active</li>
+            <li>archive</li>
+          </ul>
+        </div>
+
+        <div class="phase-box active">
+          <h4>Active</h4>
+          <div class="label">acceptance</div>
+          <ul><li>structured (3-layer)</li></ul>
+          <div class="label">Runs allowed</div>
+          <ul>
+            <li>research_iteration</li>
+            <li>synthesis</li>
+            <li>exploration</li>
+            <li>audit · reconcile</li>
+          </ul>
+          <div class="label">progress</div>
+          <ul><li>deterministic</li></ul>
+          <div class="label">actions</div>
+          <ul>
+            <li>edit intent</li>
+            <li>edit structured</li>
+            <li>edit local_policy</li>
+            <li>trigger any Run</li>
+            <li>synthesis → In-Review</li>
+            <li>archive</li>
+          </ul>
+        </div>
+
+        <div class="phase-box review">
+          <h4>In-Review</h4>
+          <div class="label">acceptance</div>
+          <ul><li>frozen snapshot</li></ul>
+          <div class="label">Runs allowed</div>
+          <ul><li><b>NONE</b></li></ul>
+          <div class="label">progress</div>
+          <ul><li>frozen</li></ul>
+          <div class="label">actions</div>
+          <ul>
+            <li>approve → Complete</li>
+            <li>reject → Active</li>
+            <li>add human note</li>
+            <li>archive</li>
+          </ul>
+          <div class="label">not allowed</div>
+          <ul><li>contract edits</li><li>new Runs</li></ul>
+        </div>
+
+        <div class="phase-box complete">
+          <h4>Complete</h4>
+          <div class="label">acceptance</div>
+          <ul><li>frozen (canonical)</li></ul>
+          <div class="label">Runs allowed</div>
+          <ul><li><b>NONE</b></li></ul>
+          <div class="label">progress</div>
+          <ul><li>100%</li></ul>
+          <div class="label">actions</div>
+          <ul>
+            <li>read</li>
+            <li>fork to new Node</li>
+            <li>export</li>
+          </ul>
+          <div class="label">not allowed</div>
+          <ul><li>any edits</li><li>return to Active</li></ul>
+        </div>
+
+        <div class="phase-box archived">
+          <h4>Archived</h4>
+          <div class="label">reason</div>
+          <ul><li>explicit abandonment</li></ul>
+          <div class="label">Runs allowed</div>
+          <ul><li><b>NONE</b></li></ul>
+          <div class="label">progress</div>
+          <ul><li>last known, frozen</li></ul>
+          <div class="label">actions</div>
+          <ul>
+            <li>read</li>
+            <li>fork to new Node</li>
+            <li>see archived_reason</li>
+          </ul>
+          <div class="label">note</div>
+          <ul><li>"failed" goes here</li></ul>
+        </div>
+      </div>
+
+      <div class="arrows-row">
+        <div class="arrow">freeze<br>(A/B/C)</div>
+        <div class="arrow">synthesis<br>ready</div>
+        <div class="arrow">approve</div>
+        <div class="arrow">&nbsp;</div>
+        <div>(any → archive)</div>
+      </div>
+
+      <div class="wire">
+        <div class="wire-title">Three phase invariants</div>
+        <ol style="margin:0;padding-left:20px;font-size:13px;line-height:1.8;color:var(--text-dim)">
+          <li><b style="color:var(--text)">Freeze is one-way.</b> Draft → Active legal. Active → Draft illegal. Never.</li>
+          <li><b style="color:var(--text)">Complete is terminal.</b> No transitions out except <code style="font-family:var(--mono);font-size:11px">fork-to-new-Node</code>. "Oops we weren't done" → create a new child to capture the gap, never revert.</li>
+          <li><b style="color:var(--text)">In-Review is an execution barrier.</b> No new Run dispatches allowed while a Node is In-Review. This is what makes human review align with a frozen artifact snapshot rather than a moving target.</li>
+        </ol>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Logic notes</div>
+        <ul>
+          <li><b>Phase is not decoration</b>. It's an execution gate. Dispatching a <code>research_iteration</code> Run to a Draft Node is a data-layer error, not a policy error.</li>
+          <li><b>Born-structured children skip Draft</b>. When a parent in Active spawns children via its acceptance, those children enter Active directly with acceptance inherited from the parent.</li>
+          <li><b>Complete and Archived are both terminal but distinct</b>. Complete = "did it." Archived = "stopped doing it." Failure is an <code>archived_reason</code>, not a separate phase.</li>
+          <li><b>In-Review blocks the execution layer, not the editor</b>. You can still add human notes, drill into past Runs, leave feedback. You just can't mutate contract or start new work until the review resolves.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §6 (lifecycle phases, 3 invariants). Task #12.
+      </div>
+    </section>
+
+    <!-- ========== V6: Freeze co-authoring ========== -->
+    <section class="view" id="v6">
+      <header class="view-header">
+        <div class="view-kicker">View 6 · Node lifecycle</div>
+        <h2 class="view-title">Freeze co-authoring session</h2>
+        <p class="view-subtitle">
+          A conversational schema builder, not a form. Agent proposes each
+          item with reasoning. User can edit, reject, append, skip, pause,
+          or reset at any point. Session state persists across pauses.
+        </p>
+      </header>
+
+      <div class="chat">
+        <div class="chat-header">
+          Node: "Design Node CRUD API" · Draft → freeze session (A triggered by agent readiness)
+        </div>
+
+        <div class="chat-body">
+
+          <div class="msg system">
+            <div class="msg-role">system</div>
+            <div class="msg-body">Session started. Agent read 3 docs, parent context (2 ancestors), and current prose acceptance. Parent is Active, so child may be born-structured from parent acceptance; agent will still ask.</div>
+          </div>
+
+          <div class="msg agent">
+            <div class="msg-role">agent</div>
+            <div class="msg-body">
+              Reading your prose acceptance: "A clean, minimal CRUD API over Node objects that enforces the schema invariants we locked in foundations §4."<br><br>
+              I'll propose structured acceptance one item at a time. You can Accept / Edit / Reject / Append your own at each step. If a layer feels wrong for this Node, say "skip this layer."<br><br>
+              <b>Starting with assertions (layer 1: did you do it?).</b>
+              <div class="proposal">
+                <b>Proposed assertion a1</b><br>
+                kind: <code>schema</code><br>
+                text: "API rejects any Node create request missing one of the 4 required fields (id, intent, parent_id, acceptance)."<br>
+                check_fn: <code>run_schema_tests('create_node_required_fields')</code>
+              </div>
+              <div class="reasoning">
+                Reasoning: foundations §4 locks exactly 4 required fields. The
+                prose says "enforces the schema invariants," so this assertion
+                binds the prose to the concrete invariant.
+              </div>
+              <div class="btn-row">
+                <button class="btn success">Accept</button>
+                <button class="btn">Edit</button>
+                <button class="btn danger">Reject (try again)</button>
+                <button class="btn">I'll add my own</button>
+                <button class="btn">Skip assertions layer</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="msg user">
+            <div class="msg-role">user</div>
+            <div class="msg-body">Accept.</div>
+          </div>
+
+          <div class="msg agent">
+            <div class="msg-role">agent</div>
+            <div class="msg-body">
+              ✓ a1 committed.
+              <div class="proposal">
+                <b>Proposed assertion a2</b><br>
+                kind: <code>schema</code><br>
+                text: "API rejects any edit that would transition a Node from Active back to Draft (freeze is one-way)."<br>
+                check_fn: <code>run_schema_tests('no_freeze_reversion')</code>
+              </div>
+              <div class="reasoning">
+                Reasoning: foundations §6 invariant 1 ("freeze is one-way").
+                This is a load-bearing invariant that has to be enforced at the
+                API layer, not just documented.
+              </div>
+              <div class="btn-row">
+                <button class="btn success">Accept</button>
+                <button class="btn">Edit</button>
+                <button class="btn danger">Reject</button>
+                <button class="btn">I'll add my own</button>
+                <button class="btn">Skip assertions layer</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="msg user">
+            <div class="msg-role">user</div>
+            <div class="msg-body">Edit → "API rejects freeze reversion AND rejects Complete → any other phase."</div>
+          </div>
+
+          <div class="msg agent">
+            <div class="msg-role">agent</div>
+            <div class="msg-body">
+              ✓ a2 committed with your edit. Good catch — I had only §6 invariant 1 in mind and missed invariant 2 (Complete is terminal).
+              <div class="proposal">
+                <b>Proposed assertion a3</b><br>
+                kind: <code>auth</code><br>
+                text: "API rejects any contract-field edit (intent / acceptance / local_policy) from a non-Layer-1 surface."<br>
+                check_fn: <code>run_auth_tests('contract_edit_origin')</code>
+              </div>
+              <div class="reasoning">
+                Reasoning: foundations §14 locks Layer 1 as the single contract
+                surface. Enforcing this server-side prevents a misconfigured
+                Layer 2 client from ever mutating contract.
+              </div>
+              <div class="btn-row">
+                <button class="btn success">Accept</button>
+                <button class="btn">Edit</button>
+                <button class="btn danger">Reject</button>
+                <button class="btn">I'll add my own</button>
+                <button class="btn">Skip assertions layer</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="msg user">
+            <div class="msg-role">user</div>
+            <div class="msg-body">[Pause session — back tomorrow]</div>
+          </div>
+
+          <div class="msg system">
+            <div class="msg-role">system</div>
+            <div class="msg-body">
+              Session paused. Partial schema saved:<br>
+              · assertions: 2 committed (a1, a2), 1 pending (a3)<br>
+              · metrics: not yet reached<br>
+              · rubric: not yet reached<br>
+              · done_when: not yet reached<br><br>
+              On resume, agent will re-read Node docs + partial schema fresh, continue from a3. Already-confirmed items will not reopen.
+            </div>
+          </div>
+
+        </div>
+
+        <div class="chat-footer">
+          <span>Session state: partial · 2 assertions committed · saved 2026-04-11 10:44</span>
+          <span>
+            <button class="btn" style="margin-right:6px">Resume</button>
+            <button class="btn">Reset to prose</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Logic notes</div>
+        <ul>
+          <li><b>Every proposal carries reasoning that cites specific doc sections</b>. The agent cannot propose in the dark; it must tie each item to evidence (prose, parent context, foundations invariants). This is the same judge-with-evidence pattern used in production LLM eval.</li>
+          <li><b>Six user interruption actions are first-class</b>: Accept / Edit / Reject / Append own / Skip layer / Pause / Reset. None of these is an edge case.</li>
+          <li><b>Pause persists partial state</b>. On resume, the agent does a fresh read of Node docs plus the partial schema. Already-confirmed items are not reopened. This keeps the session idempotent across time.</li>
+          <li><b>Sessions progress layer by layer</b>: assertions → metrics → rubric → done_when. User can "skip this layer" if the Node doesn't need that dimension.</li>
+          <li><b>This is a UX commitment, not a polish detail</b>. Without co-authoring, the freeze becomes a giant form, users avoid it, and the whole structured-acceptance pillar collapses.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §7 (acceptance format) · §8 (freeze is co-authoring). Task #11 · Task #13.
+      </div>
+    </section>
+
+    <!-- ========== V7: Fork-Return-Synthesize ========== -->
+    <section class="view" id="v7">
+      <header class="view-header">
+        <div class="view-kicker">View 7 · Execution Layer</div>
+        <h2 class="view-title">Fork-Return-Synthesize — parallel sub-Runs</h2>
+        <p class="view-subtitle">
+          One primary Run dispatches N sub-Runs in parallel. Each sub-Run
+          has an isolated scratchpad and returns a structured summary. The
+          primary Run synthesizes. Sub-Runs are invisible by default.
+        </p>
+      </header>
+
+      <div class="wire">
+        <div class="wire-title">Default view on Layer 1 (user sees only Run-P-2)</div>
+        <div class="runtree">
+          <div class="run-node primary">
+            <div class="run-header">Run-P-2 · synthesis · completed</div>
+            <div class="run-meta">Dispatched 14:32 · terminated 15:18 · duration 46 min</div>
+            <div class="run-return">
+              <div><span class="k">findings:</span> "Synthesized 3 angles. Evidence density lifted 7.1→8.4."</div>
+              <div><span class="k">confidence:</span> 0.82</div>
+              <div><span class="k" style="color:var(--warn)">needs_human_review:</span> <b>true</b> (promoted from sub-Run-C)</div>
+              <div><span class="k">spawned_sub_runs:</span> 3 · <span class="muted">click to expand</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="wire">
+        <div class="wire-title">Drill-down (Layer 2): same Run with sub-Runs revealed</div>
+        <div class="runtree">
+          <div class="run-node primary">
+            <div class="run-header">Run-P-2 · synthesis · completed</div>
+            <div class="run-meta">angle: null (primary) · reads A+B+C returns</div>
+          </div>
+
+          <div class="run-node subrun">
+            <div class="run-header">sub-Run-A · research_iteration · completed</div>
+            <div class="run-meta">angle: "fundamentals of Claude Code sub-agent mechanics" · scratchpad: /sub-A/</div>
+            <div class="run-return">
+              <div><span class="k">findings:</span> "Claude Code enforces isolation via fresh context + no sibling visibility; parent reads returns single-shot."</div>
+              <div><span class="k">concerns:</span> []</div>
+              <div><span class="k">confidence:</span> 0.88</div>
+              <div><span class="k">needs_human_review:</span> false</div>
+            </div>
+          </div>
+
+          <div class="run-node subrun">
+            <div class="run-header">sub-Run-B · research_iteration · completed</div>
+            <div class="run-meta">angle: "edge cases when sub-Runs diverge on terminology" · scratchpad: /sub-B/</div>
+            <div class="run-return">
+              <div><span class="k">findings:</span> "Divergence on terminology is a real failure mode; solved by structured returns over prose blobs."</div>
+              <div><span class="k">concerns:</span> ["may require sub-Run type schemas later"]</div>
+              <div><span class="k">confidence:</span> 0.71</div>
+              <div><span class="k">needs_human_review:</span> false</div>
+            </div>
+          </div>
+
+          <div class="run-node subrun">
+            <div class="run-header">sub-Run-C · research_iteration · completed</div>
+            <div class="run-meta">angle: "counter-evidence from Temporal / Airflow mechanics" · scratchpad: /sub-C/</div>
+            <div class="run-return flagged">
+              <div><span class="k">findings:</span> "Temporal's workflow-is-code model does not match our doc-as-source-of-truth principle; not a clean reference."</div>
+              <div><span class="k">concerns:</span> ["my counter-evidence hits a foundational philosophy, not just implementation — worth human review"]</div>
+              <div><span class="k">confidence:</span> 0.65</div>
+              <div><span class="k" style="color:var(--warn)">needs_human_review:</span> <b>true</b></div>
+            </div>
+          </div>
+
+          <div class="run-node synth">
+            <div class="run-header">Run-P-2 synthesis reasoning log</div>
+            <div class="run-meta">(agent-authored during synthesis step)</div>
+            <div class="run-return">
+              <div>· "A and B align on core claim — kept A's framing, incorporated B's edge-case concern"</div>
+              <div>· "C's counter-evidence doesn't invalidate the design but flags a philosophical tension worth surfacing"</div>
+              <div>· "Decision: write synthesis.md with A's framing, cite B's concern inline, and bubble C's needs_human_review flag to Node level"</div>
+              <div>· "Final confidence: 0.82 (penalized by C's tension)"</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Logic notes</div>
+        <ul>
+          <li><b>Scratchpads are physically disjoint directories</b>. No git conflicts are possible because sub-Runs never touch each other's files.</li>
+          <li><b>Returns are typed records, not prose blobs</b>. The primary agent reasons over <code>{findings, concerns, confidence, needs_human_review}</code>, a fixed 4-field schema. It never has to parse natural language.</li>
+          <li><b>Synthesis is the parent agent's reasoning, not an algorithm</b>. There is no merge function. The agent writes a synthesis reasoning log that describes what it kept, merged, discarded, and why.</li>
+          <li><b>Escalation is agent-driven</b>. sub-Run-C's <code>needs_human_review</code> bubbled up because Run-P-2's agent chose to promote it. Had Run-P-2's agent decided the concern was already handled, it could have suppressed the flag. No structural promotion rule.</li>
+          <li><b>Sub-Runs are invisible by default</b>. Users never see A/B/C unless they explicitly drill into Run-P-2. This protects the "user only faces Node tree" commitment.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §9 (Fork-Return-Synthesize) · §12 (escalation). Task #4 · Task #7.
+      </div>
+    </section>
+
+    <!-- ========== V8: Contract reconcile flow ========== -->
+    <section class="view" id="v8">
+      <header class="view-header">
+        <div class="view-kicker">View 8 · Execution Layer</div>
+        <h2 class="view-title">Contract change reconcile — timeline</h2>
+        <p class="view-subtitle">
+          What happens when a user edits acceptance (or local_policy, or
+          intent) while a Run is in-flight. Three possible outcomes:
+          continue, abort, or restart.
+        </p>
+      </header>
+
+      <div class="timeline">
+        <div class="tl-row">
+          <span class="tl-time">14:00</span>
+          <span class="tl-marker">●</span>
+          <div class="tl-event">
+            <b>Run-P-1 dispatched</b> · type: synthesis · acceptance snapshot v1 frozen
+          </div>
+        </div>
+        <div class="tl-row">
+          <span class="tl-time">14:15</span>
+          <span class="tl-marker">●</span>
+          <div class="tl-event">
+            <b>Run-P-1 running</b> · iteration 3/10 · read sub-A/B returns so far
+          </div>
+        </div>
+        <div class="tl-row user-action">
+          <span class="tl-time">14:22</span>
+          <span class="tl-marker">✎</span>
+          <div class="tl-event">
+            <b>USER edits acceptance</b> from Layer 1 · adds assertion a4 "must cite source-16"
+            <span class="note">(User discovered source-16 during a Layer 2 audit of a previous Run and decided the new rule is load-bearing for the Node.)</span>
+          </div>
+        </div>
+        <div class="tl-row trigger">
+          <span class="tl-time">14:22</span>
+          <span class="tl-marker">⚡</span>
+          <div class="tl-event">
+            <b>System triggers reconcile protocol</b> · notifies all in-flight Runs (here: Run-P-1) that their contract snapshot is stale
+          </div>
+        </div>
+        <div class="tl-row reconcile">
+          <span class="tl-time">14:22</span>
+          <span class="tl-marker">?</span>
+          <div class="tl-event">
+            <b>Run-P-1 agent receives new acceptance v2</b>
+            <span class="note">Agent re-reads new acceptance + its own current scratchpad state + parent_context + audit_trail so far.</span>
+          </div>
+        </div>
+        <div class="tl-row reconcile">
+          <span class="tl-time">14:23</span>
+          <span class="tl-marker">⊙</span>
+          <div class="tl-event">
+            <b>Run-P-1 agent reasoning</b>
+            <span class="note">"v2 adds requirement for source-16 citation. I have already cited source-14 and source-15. Source-16 is referenced in my remaining plan but not yet written into canonical. I can fold source-16 into the next synthesis step without restarting.
+Decision: CONTINUE · revised plan to include source-16 in the final synthesis."</span>
+          </div>
+        </div>
+        <div class="tl-row">
+          <span class="tl-time">14:23</span>
+          <span class="tl-marker">↻</span>
+          <div class="tl-event">
+            <b>Run-P-1 state: reconciled (continue)</b> · audit_trail appended with reconcile event
+          </div>
+        </div>
+        <div class="tl-row">
+          <span class="tl-time">14:24</span>
+          <span class="tl-marker">●</span>
+          <div class="tl-event">
+            <b>Run-P-1 resumes</b> · now operating under acceptance v2 snapshot
+          </div>
+        </div>
+        <div class="tl-row">
+          <span class="tl-time">14:40</span>
+          <span class="tl-marker">✓</span>
+          <div class="tl-event">
+            <b>Run-P-1 completes</b> · canonical synthesis cites source-14, 15, AND 16 ✓ · all v2 assertions pass
+          </div>
+        </div>
+      </div>
+
+      <hr class="hr">
+
+      <div class="wire">
+        <div class="wire-title">Two alternative outcomes the same trigger could produce</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+          <div>
+            <div class="panel-section-title" style="margin-bottom:10px">Outcome B: ABORT</div>
+            <div class="timeline" style="font-size:11.5px">
+              <div class="tl-row reconcile">
+                <span class="tl-time">14:23</span>
+                <span class="tl-marker">?</span>
+                <div class="tl-event">
+                  Agent reasoning:
+                  <span class="note">"v2 changed the core question — source-16 contradicts my current synthesis direction. My partial work is no longer valid. Decision: ABORT. Let a new Run with v2 start clean."</span>
+                </div>
+              </div>
+              <div class="tl-row">
+                <span class="tl-time">14:23</span>
+                <span class="tl-marker">✕</span>
+                <div class="tl-event"><b>Run-P-1 state: aborted</b><br><span class="note">termination_reason: abort_by_reconcile</span></div>
+              </div>
+              <div class="tl-row">
+                <span class="tl-time">14:24</span>
+                <span class="tl-marker">●</span>
+                <div class="tl-event"><b>System dispatches Run-P-2</b> · same Node · acceptance v2 · fresh scratchpad</div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="panel-section-title" style="margin-bottom:10px">Outcome C: RESTART with context</div>
+            <div class="timeline" style="font-size:11.5px">
+              <div class="tl-row reconcile">
+                <span class="tl-time">14:23</span>
+                <span class="tl-marker">?</span>
+                <div class="tl-event">
+                  Agent reasoning:
+                  <span class="note">"v2 needs re-analysis, but my existing findings are still useful as input. Decision: RESTART with my scratchpad as context."</span>
+                </div>
+              </div>
+              <div class="tl-row">
+                <span class="tl-time">14:23</span>
+                <span class="tl-marker">↻</span>
+                <div class="tl-event"><b>Run-P-1 restarts as Run-P-1'</b> · acceptance v2 · <span class="note">original scratchpad preserved as input_context, not overwritten</span></div>
+              </div>
+              <div class="tl-row">
+                <span class="tl-time">14:23</span>
+                <span class="tl-marker">📎</span>
+                <div class="tl-event">original Run-P-1's audit_trail preserved in audit log</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="notes-title">Logic notes</div>
+        <ul>
+          <li><b>Contract edits do NOT block</b>. User can edit freely even with in-flight Runs. This preserves "human always in control."</li>
+          <li><b>The Run's agent decides the outcome, not the system</b>. Continue / abort / restart is reasoning, not a rule table. Agent is closest to the actual state and most competent to judge.</li>
+          <li><b>Reconcile applies to all contract fields</b>, not just acceptance. Editing local_policy triggers the same protocol. This generalization is the direct consequence of Task #10's lock.</li>
+          <li><b>Every reconcile decision is an audit_trail event</b>. Three months later, opening this Run shows what contract it was dispatched against, what the new contract was, and why the agent continued / aborted / restarted.</li>
+          <li><b>No silent version forks</b>. The Node keeps its single identity; it does not split into "v1 branch" and "v2 branch." Soft-fork was considered and rejected because it turns the OKR tree into a version tree.</li>
+        </ul>
+      </div>
+
+      <div class="refs">
+        References: Foundations §11 (contract reconcile protocol) · §5 (boundary edits trigger reconcile). Task #10.
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // Simple view switcher — any [data-view] element triggers a switch
+  const navLinks = document.querySelectorAll('.nav-link');
+  const allTriggers = document.querySelectorAll('[data-view]');
+  const views = document.querySelectorAll('.view');
+
+  function show(viewId) {
+    views.forEach(v => v.classList.toggle('active', v.id === viewId));
+    navLinks.forEach(l => l.classList.toggle('active', l.dataset.view === viewId));
+    // Scroll main back to top when switching
+    document.querySelector('.content').scrollTop = 0;
+    window.scrollTo(0, 0);
+  }
+
+  allTriggers.forEach(el => {
+    el.addEventListener('click', e => {
+      e.preventDefault();
+      show(el.dataset.view);
+      history.replaceState(null, '', '#' + el.dataset.view);
+    });
+  });
+
+  // Honor hash on load
+  if (location.hash) {
+    const id = location.hash.slice(1);
+    if (document.getElementById(id)) show(id);
+  }
+</script>
+</body>
+</html>
