@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State, WebSocketUpgrade, ws},
+    extract::{Path, Query, State, WebSocketUpgrade, ws},
     http::StatusCode,
     response::IntoResponse,
     routing::{any, get, patch, post},
@@ -12,8 +12,10 @@ use tower_http::cors::CorsLayer;
 
 use crate::errors::AppError;
 use crate::hub::Hub;
+use crate::llm::{LlmClient, create_llm_client};
 use crate::shared::types::{
-    Acceptance, AncestorSummary, Node, Phase, Policy, Run, RunDispatch, RunInput, WsDaemonMessage,
+    Acceptance, AncestorSummary, Node, NodeState, Phase, Policy, Run, RunDispatch, RunInput,
+    WsDaemonMessage,
 };
 
 // ---------------------------------------------------------------------------
@@ -23,6 +25,7 @@ use crate::shared::types::{
 pub struct AppState {
     pub pool: SqlitePool,
     pub hub: Arc<RwLock<Hub>>,
+    pub llm: Arc<dyn LlmClient>,
 }
 
 // ---------------------------------------------------------------------------
@@ -57,6 +60,11 @@ pub struct RejectNodeRequest {
     pub tighter_policy: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct StateQueryParams {
+    pub rollup_depth: Option<u8>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PolicyResponse {
     pub tokens_max: Option<u64>,
@@ -72,7 +80,8 @@ pub struct PolicyResponse {
 
 pub fn create_router(pool: SqlitePool) -> Router {
     let hub = Arc::new(RwLock::new(Hub::new()));
-    let state = Arc::new(AppState { pool, hub });
+    let llm: Arc<dyn LlmClient> = Arc::from(create_llm_client());
+    let state = Arc::new(AppState { pool, hub, llm });
 
     Router::new()
         .route("/api/nodes", get(list_nodes).post(create_node))
@@ -80,6 +89,7 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/api/nodes/{id}/children", get(get_children))
         .route("/api/nodes/{id}/ancestors", get(get_ancestors))
         .route("/api/nodes/{id}/effective-policy", get(get_effective_policy))
+        .route("/api/nodes/{id}/state", get(get_node_state))
         .route("/api/nodes/{id}/activate", post(activate_node))
         .route("/api/nodes/{id}/review", post(review_node))
         .route("/api/nodes/{id}/runs", get(list_runs).post(dispatch_run))
@@ -252,6 +262,21 @@ async fn get_effective_policy(
         allowed_tools: policy.allowed_tools,
         review_required: policy.review_required,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id/state — compute and return NodeState
+// ---------------------------------------------------------------------------
+
+async fn get_node_state(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(params): Query<StateQueryParams>,
+) -> Result<Json<NodeState>, AppError> {
+    let rollup_depth = params.rollup_depth.unwrap_or(1);
+    let node_state =
+        crate::state_layer::state_at(&state.pool, &id, rollup_depth, state.llm.as_ref()).await?;
+    Ok(Json(node_state))
 }
 
 // ---------------------------------------------------------------------------

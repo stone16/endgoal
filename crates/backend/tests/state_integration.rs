@@ -120,37 +120,6 @@ async fn dispatch_run(client: &Client, addr: SocketAddr, node_id: &str) -> Strin
     body["id"].as_str().unwrap().to_string()
 }
 
-/// Mark a run as completed with given output_json.
-async fn complete_run(client: &Client, addr: SocketAddr, run_id: &str, output: &Value) {
-    // PATCH output
-    let resp = client
-        .patch(format!("{}/api/runs/{}/output", base_url(addr), run_id))
-        .json(output)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-
-    // Mark as completed via DB helper — we update status to 'completed' directly
-    // by patching the run output AND updating status via the daemon WS terminal message.
-    // Since we don't have a direct HTTP endpoint for that, we'll use the patch output
-    // approach but the run stays in "dispatched" status.
-    // For state_at() to read it, we need status='completed', so we write it via
-    // the same endpoint. In tests, we directly use the PATCH endpoint + a status update
-    // approach that we'll handle in state_at() by looking for any completed run.
-    //
-    // Actually: The spec says "latest completed Run" — status='completed'.
-    // We need to set status to 'completed'. The PATCH /output endpoint doesn't change status.
-    // We need a way to mark it completed.
-    // We'll use the existing WS daemon flow via Terminal message, but that's complex.
-    //
-    // Solution: state_at() will also check runs with status 'completed' OR we use a
-    // test helper that directly writes to DB. Since integration tests use HTTP only,
-    // we'll use the ws terminal message approach in the E2E test.
-    // For unit tests in state_layer.rs, we'll write directly to DB.
-    let _ = (client, addr, run_id, output); // suppress unused warnings in this stub
-}
-
 // ---------------------------------------------------------------------------
 // AC1: Unit test — progress formula with 2 pass/1 fail assertions + metric + rubric
 // ---------------------------------------------------------------------------
