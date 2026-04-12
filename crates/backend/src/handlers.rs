@@ -3,14 +3,16 @@ use axum::{
     extract::{Path, State, WebSocketUpgrade, ws},
     http::StatusCode,
     response::IntoResponse,
-    routing::{any, get, post},
+    routing::{any, get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
 
 use crate::errors::AppError;
-use crate::shared::types::{Acceptance, Node, Phase, Policy, WsDaemonMessage};
+use crate::shared::types::{
+    Acceptance, AncestorSummary, Node, Phase, Policy, Run, RunInput, WsDaemonMessage,
+};
 
 // ---------------------------------------------------------------------------
 // App state
@@ -40,6 +42,18 @@ pub struct PatchNodeRequest {
     pub phase: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DispatchRunRequest {
+    #[serde(rename = "type")]
+    pub run_type: String,
+    pub runtime: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RejectNodeRequest {
+    pub tighter_policy: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PolicyResponse {
     pub tokens_max: Option<u64>,
@@ -64,6 +78,11 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/api/nodes/{id}/effective-policy", get(get_effective_policy))
         .route("/api/nodes/{id}/activate", post(activate_node))
         .route("/api/nodes/{id}/review", post(review_node))
+        .route("/api/nodes/{id}/runs", get(list_runs).post(dispatch_run))
+        .route("/api/nodes/{id}/approve", post(approve_node))
+        .route("/api/nodes/{id}/reject", post(reject_node))
+        .route("/api/runs/{id}", get(get_run))
+        .route("/api/runs/{id}/output", patch(patch_run_output))
         .route("/ws/daemon", any(ws_daemon_handler))
         .with_state(state)
 }
@@ -545,6 +564,226 @@ async fn handle_daemon_ws(mut socket: ws::WebSocket) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/nodes/:id/runs — dispatch a run with enforcement
+// ---------------------------------------------------------------------------
+
+async fn dispatch_run(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+    Json(req): Json<DispatchRunRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let node = fetch_node(&state.pool, &node_id).await?;
+
+    // Enforcement rule 1: Node phase must be Active
+    if node.phase != Phase::Active {
+        // In-Review gets a special error code
+        if node.phase == Phase::InReview {
+            return Err(AppError::Unprocessable("in_review_gate".into()));
+        }
+        return Err(AppError::Unprocessable("wrong_phase".into()));
+    }
+
+    // Enforcement rule 2: acceptance must be Structured (unless exploration)
+    if req.run_type != "exploration" {
+        let acceptance: Acceptance = serde_json::from_str(&node.acceptance_json)
+            .map_err(|e| AppError::Internal(format!("invalid acceptance_json: {e}")))?;
+        if matches!(acceptance, Acceptance::Prose { .. }) {
+            return Err(AppError::Unprocessable("requires_freeze".into()));
+        }
+    }
+
+    // Build the input_snapshot_json
+    let acceptance: Acceptance = serde_json::from_str(&node.acceptance_json)
+        .map_err(|e| AppError::Internal(format!("invalid acceptance_json: {e}")))?;
+
+    let effective_policy = compute_effective_policy(&state.pool, &node_id).await?;
+
+    let ancestors = fetch_ancestor_nodes(&state.pool, &node_id).await?;
+    let parent_context: Vec<AncestorSummary> = ancestors
+        .into_iter()
+        .map(|a| {
+            let acc_summary = a.acceptance_json.clone();
+            AncestorSummary {
+                id: a.id,
+                intent: a.intent,
+                phase: a.phase,
+                acceptance_summary: acc_summary,
+                canonical_summary: a.canonical_artifact_text,
+                progress: 0,
+            }
+        })
+        .collect();
+
+    let run_input = RunInput {
+        intent: node.intent.clone(),
+        acceptance,
+        effective_policy,
+        parent_context,
+        node_docs: vec![],
+    };
+
+    let input_snapshot_json = serde_json::to_string(&run_input)
+        .map_err(|e| AppError::Internal(format!("failed to serialize input snapshot: {e}")))?;
+
+    // Write Run row to DB
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO runs (id, node_id, type, status, runtime, input_snapshot_json, created_at)
+         VALUES (?, ?, ?, 'dispatched', ?, ?, ?)"
+    )
+    .bind(&run_id)
+    .bind(&node_id)
+    .bind(&req.run_type)
+    .bind(&req.runtime)
+    .bind(&input_snapshot_json)
+    .bind(&now)
+    .execute(&state.pool)
+    .await?;
+
+    // Fire-and-forget WS dispatch to daemon (if connected)
+    // For now, we just log — actual WS hub implementation comes in CP05
+    println!("[dispatch] Run {} dispatched for node {}", run_id, node_id);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "id": run_id, "status": "dispatched" })),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id/runs — list runs for node
+// ---------------------------------------------------------------------------
+
+async fn list_runs(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+) -> Result<Json<Vec<Run>>, AppError> {
+    // Verify node exists
+    let _ = fetch_node(&state.pool, &node_id).await?;
+
+    let rows = sqlx::query_as::<_, RunRow>(
+        "SELECT id, node_id, type, status, runtime, input_snapshot_json, output_json,
+                scratchpad_path, started_at, ended_at, created_at
+         FROM runs WHERE node_id = ? ORDER BY created_at"
+    )
+    .bind(&node_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows.into_iter().map(|r| r.into_run()).collect()))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/runs/:id — get single run
+// ---------------------------------------------------------------------------
+
+async fn get_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Run>, AppError> {
+    let run = fetch_run(&state.pool, &run_id).await?;
+    Ok(Json(run))
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/runs/:id/output — write output_json
+// ---------------------------------------------------------------------------
+
+async fn patch_run_output(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+    Json(output): Json<serde_json::Value>,
+) -> Result<Json<Run>, AppError> {
+    // Verify run exists
+    let _ = fetch_run(&state.pool, &run_id).await?;
+
+    let output_str = serde_json::to_string(&output)
+        .map_err(|e| AppError::Internal(format!("failed to serialize output: {e}")))?;
+
+    sqlx::query("UPDATE runs SET output_json = ? WHERE id = ?")
+        .bind(&output_str)
+        .bind(&run_id)
+        .execute(&state.pool)
+        .await?;
+
+    let run = fetch_run(&state.pool, &run_id).await?;
+    Ok(Json(run))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/approve — In-Review -> Complete
+// ---------------------------------------------------------------------------
+
+async fn approve_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Node>, AppError> {
+    let existing = fetch_node(&state.pool, &id).await?;
+
+    if existing.phase != Phase::InReview {
+        return Err(AppError::BadRequest(format!(
+            "can only approve an in-review node; current phase is {}",
+            existing.phase
+        )));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE nodes SET phase = 'complete', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/reject — In-Review -> Active, optional tighter_policy
+// ---------------------------------------------------------------------------
+
+async fn reject_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Option<Json<RejectNodeRequest>>,
+) -> Result<Json<Node>, AppError> {
+    let existing = fetch_node(&state.pool, &id).await?;
+
+    if existing.phase != Phase::InReview {
+        return Err(AppError::BadRequest(format!(
+            "can only reject an in-review node; current phase is {}",
+            existing.phase
+        )));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE nodes SET phase = 'active', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    // Apply tighter_policy if provided
+    if let Some(Json(req)) = body {
+        if let Some(tighter_policy) = req.tighter_policy {
+            let policy_str = serde_json::to_string(&tighter_policy)
+                .map_err(|e| AppError::Internal(format!("failed to serialize policy: {e}")))?;
+            sqlx::query("UPDATE nodes SET local_policy_json = ?, updated_at = ? WHERE id = ?")
+                .bind(&policy_str)
+                .bind(&now)
+                .bind(&id)
+                .execute(&state.pool)
+                .await?;
+        }
+    }
+
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
 // DB helper types and functions
 // ---------------------------------------------------------------------------
 
@@ -605,4 +844,159 @@ async fn fetch_node(pool: &SqlitePool, id: &str) -> Result<Node, AppError> {
     .ok_or_else(|| AppError::NotFound(format!("node {id} not found")))?;
 
     Ok(row.into_node())
+}
+
+/// Row type for runs table.
+#[derive(Debug, sqlx::FromRow)]
+struct RunRow {
+    id: String,
+    node_id: String,
+    #[sqlx(rename = "type")]
+    run_type: String,
+    status: String,
+    runtime: String,
+    input_snapshot_json: Option<String>,
+    output_json: Option<String>,
+    scratchpad_path: Option<String>,
+    started_at: Option<String>,
+    ended_at: Option<String>,
+    created_at: String,
+}
+
+impl RunRow {
+    fn into_run(self) -> Run {
+        Run {
+            id: self.id,
+            node_id: self.node_id,
+            run_type: self.run_type,
+            status: self.status,
+            runtime: self.runtime,
+            input_snapshot_json: self.input_snapshot_json,
+            output_json: self.output_json,
+            scratchpad_path: self.scratchpad_path,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            created_at: self.created_at,
+        }
+    }
+}
+
+/// Fetch a single run by ID.
+async fn fetch_run(pool: &SqlitePool, id: &str) -> Result<Run, AppError> {
+    let row = sqlx::query_as::<_, RunRow>(
+        "SELECT id, node_id, type, status, runtime, input_snapshot_json, output_json,
+                scratchpad_path, started_at, ended_at, created_at
+         FROM runs WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("run {id} not found")))?;
+
+    Ok(row.into_run())
+}
+
+/// Fetch ancestor nodes (excluding self), ordered root-first.
+async fn fetch_ancestor_nodes(pool: &SqlitePool, node_id: &str) -> Result<Vec<Node>, AppError> {
+    let rows = sqlx::query_as::<_, NodeRow>(
+        "WITH RECURSIVE ancestors(id, intent, parent_id, phase, acceptance_json, local_policy_json,
+                                  canonical_artifact_text, canonical_updated_by_run_id,
+                                  next_step_cache, next_step_cache_for_run_id,
+                                  created_at, updated_at, depth) AS (
+            SELECT n.id, n.intent, n.parent_id, n.phase, n.acceptance_json, n.local_policy_json,
+                   n.canonical_artifact_text, n.canonical_updated_by_run_id,
+                   n.next_step_cache, n.next_step_cache_for_run_id,
+                   n.created_at, n.updated_at, 1
+            FROM nodes n
+            INNER JOIN nodes child ON child.parent_id = n.id
+            WHERE child.id = ?
+            UNION ALL
+            SELECT p.id, p.intent, p.parent_id, p.phase, p.acceptance_json, p.local_policy_json,
+                   p.canonical_artifact_text, p.canonical_updated_by_run_id,
+                   p.next_step_cache, p.next_step_cache_for_run_id,
+                   p.created_at, p.updated_at, a.depth + 1
+            FROM nodes p
+            INNER JOIN ancestors a ON a.parent_id = p.id
+         )
+         SELECT id, intent, parent_id, phase, acceptance_json, local_policy_json,
+                canonical_artifact_text, canonical_updated_by_run_id,
+                next_step_cache, next_step_cache_for_run_id,
+                created_at, updated_at
+         FROM ancestors
+         ORDER BY depth DESC"
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| r.into_node()).collect())
+}
+
+/// Compute the effective (merged) policy for a node via recursive CTE.
+async fn compute_effective_policy(pool: &SqlitePool, node_id: &str) -> Result<Policy, AppError> {
+    let rows: Vec<PolicyRow> = sqlx::query_as::<_, PolicyRow>(
+        "WITH RECURSIVE chain(id, parent_id, local_policy_json, depth) AS (
+            SELECT id, parent_id, local_policy_json, 0
+            FROM nodes WHERE id = ?
+            UNION ALL
+            SELECT n.id, n.parent_id, n.local_policy_json, c.depth + 1
+            FROM nodes n
+            INNER JOIN chain c ON c.parent_id = n.id
+         )
+         SELECT local_policy_json FROM chain
+         WHERE local_policy_json IS NOT NULL
+         ORDER BY depth ASC"
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut merged = Policy {
+        tokens_max: None,
+        iterations_max: None,
+        wallclock_max_s: None,
+        allowed_tools: None,
+        review_required: None,
+    };
+
+    for row in &rows {
+        if let Some(ref json_str) = row.local_policy_json {
+            if let Ok(policy) = serde_json::from_str::<Policy>(json_str) {
+                if let Some(val) = policy.tokens_max {
+                    merged.tokens_max = Some(match merged.tokens_max {
+                        Some(existing) => existing.min(val),
+                        None => val,
+                    });
+                }
+                if let Some(val) = policy.iterations_max {
+                    merged.iterations_max = Some(match merged.iterations_max {
+                        Some(existing) => existing.min(val),
+                        None => val,
+                    });
+                }
+                if let Some(val) = policy.wallclock_max_s {
+                    merged.wallclock_max_s = Some(match merged.wallclock_max_s {
+                        Some(existing) => existing.min(val),
+                        None => val,
+                    });
+                }
+                if let Some(ref tools) = policy.allowed_tools {
+                    merged.allowed_tools = Some(match merged.allowed_tools {
+                        Some(existing) => {
+                            existing.into_iter().filter(|t| tools.contains(t)).collect()
+                        }
+                        None => tools.clone(),
+                    });
+                }
+                if let Some(val) = policy.review_required {
+                    merged.review_required = Some(match merged.review_required {
+                        Some(existing) => existing || val,
+                        None => val,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(merged)
 }
