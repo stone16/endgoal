@@ -9,6 +9,10 @@ dist/
 build/
 .next/
 out/
+target/
+
+# Rust ts-rs default output (canonical copy is frontend/bindings/)
+crates/shared/bindings/
 
 # Environment
 .env

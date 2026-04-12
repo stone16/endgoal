@@ -1,0 +1,19 @@
+[package]
+name = "endgoal-shared"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+generate-bindings = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ts-rs = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3"
