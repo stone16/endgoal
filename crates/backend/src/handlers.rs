@@ -1,0 +1,538 @@
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{get, post},
+};
+use serde::{Deserialize, Serialize};
+use sqlx::sqlite::SqlitePool;
+use std::sync::Arc;
+
+use crate::errors::AppError;
+use crate::shared::types::{Acceptance, Node, Phase, Policy};
+
+// ---------------------------------------------------------------------------
+// App state
+// ---------------------------------------------------------------------------
+
+pub struct AppState {
+    pub pool: SqlitePool,
+}
+
+// ---------------------------------------------------------------------------
+// Request/Response types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct CreateNodeRequest {
+    pub intent: String,
+    pub parent_id: Option<String>,
+    pub acceptance_json: Option<String>,
+    pub local_policy_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchNodeRequest {
+    pub intent: Option<String>,
+    pub local_policy: Option<String>,
+    /// Rejected if present — phase changes happen via dedicated endpoints.
+    pub phase: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PolicyResponse {
+    pub tokens_max: Option<u64>,
+    pub iterations_max: Option<u64>,
+    pub wallclock_max_s: Option<u64>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub review_required: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+pub fn create_router(pool: SqlitePool) -> Router {
+    let state = Arc::new(AppState { pool });
+
+    Router::new()
+        .route("/api/nodes", get(list_nodes).post(create_node))
+        .route("/api/nodes/{id}", get(get_node).patch(patch_node).delete(delete_node))
+        .route("/api/nodes/{id}/children", get(get_children))
+        .route("/api/nodes/{id}/ancestors", get(get_ancestors))
+        .route("/api/nodes/{id}/effective-policy", get(get_effective_policy))
+        .route("/api/nodes/{id}/activate", post(activate_node))
+        .route("/api/nodes/{id}/review", post(review_node))
+        .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes — create node
+// ---------------------------------------------------------------------------
+
+async fn create_node(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateNodeRequest>,
+) -> Result<(StatusCode, Json<Node>), AppError> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let acceptance = req
+        .acceptance_json
+        .unwrap_or_else(|| r#"{"type":"prose","text":""}"#.to_string());
+
+    sqlx::query(
+        "INSERT INTO nodes (id, intent, parent_id, phase, acceptance_json, local_policy_json, created_at, updated_at)
+         VALUES (?, ?, ?, 'draft', ?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(&req.intent)
+    .bind(&req.parent_id)
+    .bind(&acceptance)
+    .bind(&req.local_policy_json)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.pool)
+    .await?;
+
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok((StatusCode::CREATED, Json(node)))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes — list top-level nodes (parent_id IS NULL)
+// ---------------------------------------------------------------------------
+
+async fn list_nodes(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<Node>>, AppError> {
+    let rows = sqlx::query_as::<_, NodeRow>(
+        "SELECT id, intent, parent_id, phase, acceptance_json, local_policy_json,
+                canonical_artifact_text, canonical_updated_by_run_id,
+                next_step_cache, next_step_cache_for_run_id,
+                created_at, updated_at
+         FROM nodes WHERE parent_id IS NULL ORDER BY created_at"
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows.into_iter().map(|r| r.into_node()).collect()))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id — single node
+// ---------------------------------------------------------------------------
+
+async fn get_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Node>, AppError> {
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id/children — direct children
+// ---------------------------------------------------------------------------
+
+async fn get_children(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Node>>, AppError> {
+    let rows = sqlx::query_as::<_, NodeRow>(
+        "SELECT id, intent, parent_id, phase, acceptance_json, local_policy_json,
+                canonical_artifact_text, canonical_updated_by_run_id,
+                next_step_cache, next_step_cache_for_run_id,
+                created_at, updated_at
+         FROM nodes WHERE parent_id = ? ORDER BY created_at"
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows.into_iter().map(|r| r.into_node()).collect()))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id/ancestors — ancestor chain [root, ..., parent] (NOT self)
+// ---------------------------------------------------------------------------
+
+async fn get_ancestors(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Node>>, AppError> {
+    // Recursive CTE to walk up the ancestor chain
+    let rows = sqlx::query_as::<_, NodeRow>(
+        "WITH RECURSIVE ancestors(id, intent, parent_id, phase, acceptance_json, local_policy_json,
+                                  canonical_artifact_text, canonical_updated_by_run_id,
+                                  next_step_cache, next_step_cache_for_run_id,
+                                  created_at, updated_at, depth) AS (
+            -- Start from the node's parent (exclude self)
+            SELECT n.id, n.intent, n.parent_id, n.phase, n.acceptance_json, n.local_policy_json,
+                   n.canonical_artifact_text, n.canonical_updated_by_run_id,
+                   n.next_step_cache, n.next_step_cache_for_run_id,
+                   n.created_at, n.updated_at, 1
+            FROM nodes n
+            INNER JOIN nodes child ON child.parent_id = n.id
+            WHERE child.id = ?
+            UNION ALL
+            SELECT p.id, p.intent, p.parent_id, p.phase, p.acceptance_json, p.local_policy_json,
+                   p.canonical_artifact_text, p.canonical_updated_by_run_id,
+                   p.next_step_cache, p.next_step_cache_for_run_id,
+                   p.created_at, p.updated_at, a.depth + 1
+            FROM nodes p
+            INNER JOIN ancestors a ON a.parent_id = p.id
+         )
+         SELECT id, intent, parent_id, phase, acceptance_json, local_policy_json,
+                canonical_artifact_text, canonical_updated_by_run_id,
+                next_step_cache, next_step_cache_for_run_id,
+                created_at, updated_at
+         FROM ancestors
+         ORDER BY depth DESC"
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows.into_iter().map(|r| r.into_node()).collect()))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id/effective-policy — merged policy via recursive CTE
+// ---------------------------------------------------------------------------
+
+async fn get_effective_policy(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<PolicyResponse>, AppError> {
+    // Verify node exists
+    let _ = fetch_node(&state.pool, &id).await?;
+
+    // Recursive CTE to collect all policies from node to root
+    let rows: Vec<PolicyRow> = sqlx::query_as::<_, PolicyRow>(
+        "WITH RECURSIVE chain(id, parent_id, local_policy_json, depth) AS (
+            SELECT id, parent_id, local_policy_json, 0
+            FROM nodes WHERE id = ?
+            UNION ALL
+            SELECT n.id, n.parent_id, n.local_policy_json, c.depth + 1
+            FROM nodes n
+            INNER JOIN chain c ON c.parent_id = n.id
+         )
+         SELECT local_policy_json FROM chain
+         WHERE local_policy_json IS NOT NULL
+         ORDER BY depth ASC"
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut merged = PolicyResponse {
+        tokens_max: None,
+        iterations_max: None,
+        wallclock_max_s: None,
+        allowed_tools: None,
+        review_required: None,
+    };
+
+    // Walk from self -> root, merging policies
+    // For numeric fields: take minimum (tightest)
+    // For allowed_tools: intersection
+    // For review_required: OR (true wins)
+    for row in &rows {
+        if let Some(ref json_str) = row.local_policy_json {
+            if let Ok(policy) = serde_json::from_str::<Policy>(json_str) {
+                // tokens_max: min
+                if let Some(val) = policy.tokens_max {
+                    merged.tokens_max = Some(match merged.tokens_max {
+                        Some(existing) => existing.min(val),
+                        None => val,
+                    });
+                }
+                // iterations_max: min
+                if let Some(val) = policy.iterations_max {
+                    merged.iterations_max = Some(match merged.iterations_max {
+                        Some(existing) => existing.min(val),
+                        None => val,
+                    });
+                }
+                // wallclock_max_s: min
+                if let Some(val) = policy.wallclock_max_s {
+                    merged.wallclock_max_s = Some(match merged.wallclock_max_s {
+                        Some(existing) => existing.min(val),
+                        None => val,
+                    });
+                }
+                // allowed_tools: intersection
+                if let Some(ref tools) = policy.allowed_tools {
+                    merged.allowed_tools = Some(match merged.allowed_tools {
+                        Some(existing) => {
+                            existing.into_iter().filter(|t| tools.contains(t)).collect()
+                        }
+                        None => tools.clone(),
+                    });
+                }
+                // review_required: OR
+                if let Some(val) = policy.review_required {
+                    merged.review_required = Some(match merged.review_required {
+                        Some(existing) => existing || val,
+                        None => val,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(Json(merged))
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/nodes/:id — update intent and/or local_policy only
+// ---------------------------------------------------------------------------
+
+async fn patch_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<PatchNodeRequest>,
+) -> Result<Json<Node>, AppError> {
+    // Reject if phase field is present
+    if req.phase.is_some() {
+        return Err(AppError::BadRequest(
+            "phase cannot be set via PATCH; use dedicated phase transition endpoints".into(),
+        ));
+    }
+
+    let existing = fetch_node(&state.pool, &id).await?;
+
+    // Validate local_policy monotonicity if being updated
+    if let Some(ref new_policy_str) = req.local_policy {
+        if let Some(ref existing_policy_str) = existing.local_policy_json {
+            let existing_policy: Policy = serde_json::from_str(existing_policy_str)
+                .map_err(|e| AppError::Internal(format!("invalid existing policy: {e}")))?;
+            let new_policy: Policy = serde_json::from_str(new_policy_str)
+                .map_err(|e| AppError::BadRequest(format!("invalid policy JSON: {e}")))?;
+
+            validate_policy_monotonicity(&existing_policy, &new_policy)?;
+        }
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    if let Some(ref intent) = req.intent {
+        sqlx::query("UPDATE nodes SET intent = ?, updated_at = ? WHERE id = ?")
+            .bind(intent)
+            .bind(&now)
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    if let Some(ref local_policy) = req.local_policy {
+        sqlx::query("UPDATE nodes SET local_policy_json = ?, updated_at = ? WHERE id = ?")
+            .bind(local_policy)
+            .bind(&now)
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok(Json(node))
+}
+
+/// Validate that a new policy only tightens (never loosens) compared to existing.
+fn validate_policy_monotonicity(existing: &Policy, new: &Policy) -> Result<(), AppError> {
+    // tokens_max: new must be <= existing (tighter)
+    if let (Some(existing_val), Some(new_val)) = (existing.tokens_max, new.tokens_max) {
+        if new_val > existing_val {
+            return Err(AppError::BadRequest(format!(
+                "tokens_max can only be tightened: {} -> {} is loosening",
+                existing_val, new_val
+            )));
+        }
+    }
+
+    // iterations_max: new must be <= existing
+    if let (Some(existing_val), Some(new_val)) = (existing.iterations_max, new.iterations_max) {
+        if new_val > existing_val {
+            return Err(AppError::BadRequest(format!(
+                "iterations_max can only be tightened: {} -> {} is loosening",
+                existing_val, new_val
+            )));
+        }
+    }
+
+    // wallclock_max_s: new must be <= existing
+    if let (Some(existing_val), Some(new_val)) = (existing.wallclock_max_s, new.wallclock_max_s) {
+        if new_val > existing_val {
+            return Err(AppError::BadRequest(format!(
+                "wallclock_max_s can only be tightened: {} -> {} is loosening",
+                existing_val, new_val
+            )));
+        }
+    }
+
+    // review_required: cannot go from true to false
+    if let (Some(true), Some(false)) = (existing.review_required, new.review_required) {
+        return Err(AppError::BadRequest(
+            "review_required cannot be loosened from true to false".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /api/nodes/:id — soft delete (set phase=archived)
+// ---------------------------------------------------------------------------
+
+async fn delete_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Node>, AppError> {
+    let existing = fetch_node(&state.pool, &id).await?;
+    let phase: Phase = existing.phase.to_string().parse().unwrap();
+
+    // Complete nodes cannot transition
+    if phase == Phase::Complete {
+        return Err(AppError::BadRequest(
+            "cannot archive a completed node".into(),
+        ));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE nodes SET phase = 'archived', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/activate — Draft -> Active
+// ---------------------------------------------------------------------------
+
+async fn activate_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Node>, AppError> {
+    let existing = fetch_node(&state.pool, &id).await?;
+
+    if existing.phase != Phase::Draft {
+        return Err(AppError::BadRequest(format!(
+            "can only activate a draft node; current phase is {}",
+            existing.phase
+        )));
+    }
+
+    // Draft->Active blocked if acceptance is prose
+    let acceptance: Acceptance = serde_json::from_str(&existing.acceptance_json)
+        .map_err(|e| AppError::Internal(format!("invalid acceptance_json: {e}")))?;
+    if matches!(acceptance, Acceptance::Prose { .. }) {
+        return Err(AppError::BadRequest(
+            "cannot activate a node with prose acceptance; structured acceptance required".into(),
+        ));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE nodes SET phase = 'active', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/review — Active -> In-Review
+// ---------------------------------------------------------------------------
+
+async fn review_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Node>, AppError> {
+    let existing = fetch_node(&state.pool, &id).await?;
+
+    if existing.phase != Phase::Active {
+        return Err(AppError::BadRequest(format!(
+            "can only review an active node; current phase is {}",
+            existing.phase
+        )));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE nodes SET phase = 'in_review', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    let node = fetch_node(&state.pool, &id).await?;
+    Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
+// DB helper types and functions
+// ---------------------------------------------------------------------------
+
+/// Row type for sqlx query_as. Mirrors the nodes table columns.
+#[derive(Debug, sqlx::FromRow)]
+struct NodeRow {
+    id: String,
+    intent: String,
+    parent_id: Option<String>,
+    phase: String,
+    acceptance_json: String,
+    local_policy_json: Option<String>,
+    canonical_artifact_text: Option<String>,
+    canonical_updated_by_run_id: Option<String>,
+    next_step_cache: Option<String>,
+    next_step_cache_for_run_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl NodeRow {
+    fn into_node(self) -> Node {
+        Node {
+            id: self.id,
+            intent: self.intent,
+            parent_id: self.parent_id,
+            phase: self.phase.parse::<Phase>().unwrap_or(Phase::Draft),
+            acceptance_json: self.acceptance_json,
+            local_policy_json: self.local_policy_json,
+            canonical_artifact_text: self.canonical_artifact_text,
+            canonical_updated_by_run_id: self.canonical_updated_by_run_id,
+            next_step_cache: self.next_step_cache,
+            next_step_cache_for_run_id: self.next_step_cache_for_run_id,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+/// Minimal row for the effective_policy CTE.
+#[derive(Debug, sqlx::FromRow)]
+struct PolicyRow {
+    local_policy_json: Option<String>,
+}
+
+/// Fetch a single node by ID.
+async fn fetch_node(pool: &SqlitePool, id: &str) -> Result<Node, AppError> {
+    let row = sqlx::query_as::<_, NodeRow>(
+        "SELECT id, intent, parent_id, phase, acceptance_json, local_policy_json,
+                canonical_artifact_text, canonical_updated_by_run_id,
+                next_step_cache, next_step_cache_for_run_id,
+                created_at, updated_at
+         FROM nodes WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("node {id} not found")))?;
+
+    Ok(row.into_node())
+}
