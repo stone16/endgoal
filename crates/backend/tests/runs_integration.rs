@@ -5,8 +5,10 @@
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
+use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 
 /// Helper: start the axum server on a random port with a temp DB, return (addr, tempdir_guard).
+/// Also auto-connects a mock daemon to the hub (required since CP05 for dispatch to work).
 async fn start_server() -> (SocketAddr, tempfile::TempDir) {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let db_path = tmp.path().join("test.db");
@@ -23,6 +25,31 @@ async fn start_server() -> (SocketAddr, tempfile::TempDir) {
 
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
+    });
+
+    // Connect a mock daemon that stays alive for the test lifetime.
+    // It reads and discards RunDispatch messages so the channel doesn't block.
+    let ws_url = format!("ws://{}/ws/daemon", addr);
+    let uri: tokio_tungstenite::tungstenite::http::Uri = ws_url.parse().unwrap();
+    let mut req = uri.into_client_request().unwrap();
+    req.headers_mut().insert(
+        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+        tokio_tungstenite::tungstenite::http::HeaderValue::from_static("Bearer dev-token"),
+    );
+    // Retry a few times until the server is ready
+    let mut daemon_ws = None;
+    for _ in 0..10 {
+        match connect_async(req.clone()).await {
+            Ok((ws, _)) => { daemon_ws = Some(ws); break; }
+            Err(_) => { tokio::time::sleep(tokio::time::Duration::from_millis(20)).await; }
+        }
+    }
+    let mut daemon_ws = daemon_ws.expect("mock daemon should connect");
+
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        // Drain messages from server (RunDispatch payloads) — don't process them
+        while let Some(Ok(_)) = daemon_ws.next().await {}
     });
 
     (addr, tmp)

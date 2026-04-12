@@ -7,11 +7,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use tower_http::cors::CorsLayer;
 
 use crate::errors::AppError;
+use crate::hub::Hub;
 use crate::shared::types::{
-    Acceptance, AncestorSummary, Node, Phase, Policy, Run, RunInput, WsDaemonMessage,
+    Acceptance, AncestorSummary, Node, Phase, Policy, Run, RunDispatch, RunInput, WsDaemonMessage,
 };
 
 // ---------------------------------------------------------------------------
@@ -20,6 +22,7 @@ use crate::shared::types::{
 
 pub struct AppState {
     pub pool: SqlitePool,
+    pub hub: Arc<RwLock<Hub>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +71,8 @@ pub struct PolicyResponse {
 // ---------------------------------------------------------------------------
 
 pub fn create_router(pool: SqlitePool) -> Router {
-    let state = Arc::new(AppState { pool });
+    let hub = Arc::new(RwLock::new(Hub::new()));
+    let state = Arc::new(AppState { pool, hub });
 
     Router::new()
         .route("/api/nodes", get(list_nodes).post(create_node))
@@ -84,7 +88,18 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/api/runs/{id}", get(get_run))
         .route("/api/runs/{id}/output", patch(patch_run_output))
         .route("/ws/daemon", any(ws_daemon_handler))
+        .route("/ws/frontend", any(ws_frontend_handler))
+        .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// Broadcast helper
+// ---------------------------------------------------------------------------
+
+fn broadcast_node_updated(hub: &Arc<RwLock<Hub>>, node_id: &str) {
+    let msg = serde_json::json!({ "type": "node:updated", "id": node_id }).to_string();
+    hub.read().unwrap().broadcast(&msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +131,7 @@ async fn create_node(
     .await?;
 
     let node = fetch_node(&state.pool, &id).await?;
+    broadcast_node_updated(&state.hub, &id);
     Ok((StatusCode::CREATED, Json(node)))
 }
 
@@ -228,81 +244,14 @@ async fn get_effective_policy(
     // Verify node exists
     let _ = fetch_node(&state.pool, &id).await?;
 
-    // Recursive CTE to collect all policies from node to root
-    let rows: Vec<PolicyRow> = sqlx::query_as::<_, PolicyRow>(
-        "WITH RECURSIVE chain(id, parent_id, local_policy_json, depth) AS (
-            SELECT id, parent_id, local_policy_json, 0
-            FROM nodes WHERE id = ?
-            UNION ALL
-            SELECT n.id, n.parent_id, n.local_policy_json, c.depth + 1
-            FROM nodes n
-            INNER JOIN chain c ON c.parent_id = n.id
-         )
-         SELECT local_policy_json FROM chain
-         WHERE local_policy_json IS NOT NULL
-         ORDER BY depth ASC"
-    )
-    .bind(&id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let mut merged = PolicyResponse {
-        tokens_max: None,
-        iterations_max: None,
-        wallclock_max_s: None,
-        allowed_tools: None,
-        review_required: None,
-    };
-
-    // Walk from self -> root, merging policies
-    // For numeric fields: take minimum (tightest)
-    // For allowed_tools: intersection
-    // For review_required: OR (true wins)
-    for row in &rows {
-        if let Some(ref json_str) = row.local_policy_json {
-            if let Ok(policy) = serde_json::from_str::<Policy>(json_str) {
-                // tokens_max: min
-                if let Some(val) = policy.tokens_max {
-                    merged.tokens_max = Some(match merged.tokens_max {
-                        Some(existing) => existing.min(val),
-                        None => val,
-                    });
-                }
-                // iterations_max: min
-                if let Some(val) = policy.iterations_max {
-                    merged.iterations_max = Some(match merged.iterations_max {
-                        Some(existing) => existing.min(val),
-                        None => val,
-                    });
-                }
-                // wallclock_max_s: min
-                if let Some(val) = policy.wallclock_max_s {
-                    merged.wallclock_max_s = Some(match merged.wallclock_max_s {
-                        Some(existing) => existing.min(val),
-                        None => val,
-                    });
-                }
-                // allowed_tools: intersection
-                if let Some(ref tools) = policy.allowed_tools {
-                    merged.allowed_tools = Some(match merged.allowed_tools {
-                        Some(existing) => {
-                            existing.into_iter().filter(|t| tools.contains(t)).collect()
-                        }
-                        None => tools.clone(),
-                    });
-                }
-                // review_required: OR
-                if let Some(val) = policy.review_required {
-                    merged.review_required = Some(match merged.review_required {
-                        Some(existing) => existing || val,
-                        None => val,
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(Json(merged))
+    let policy = compute_effective_policy(&state.pool, &id).await?;
+    Ok(Json(PolicyResponse {
+        tokens_max: policy.tokens_max,
+        iterations_max: policy.iterations_max,
+        wallclock_max_s: policy.wallclock_max_s,
+        allowed_tools: policy.allowed_tools,
+        review_required: policy.review_required,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +305,7 @@ async fn patch_node(
     }
 
     let node = fetch_node(&state.pool, &id).await?;
+    broadcast_node_updated(&state.hub, &id);
     Ok(Json(node))
 }
 
@@ -427,6 +377,7 @@ async fn delete_node(
         .await?;
 
     let node = fetch_node(&state.pool, &id).await?;
+    broadcast_node_updated(&state.hub, &id);
     Ok(Json(node))
 }
 
@@ -464,6 +415,7 @@ async fn activate_node(
         .await?;
 
     let node = fetch_node(&state.pool, &id).await?;
+    broadcast_node_updated(&state.hub, &id);
     Ok(Json(node))
 }
 
@@ -492,11 +444,12 @@ async fn review_node(
         .await?;
 
     let node = fetch_node(&state.pool, &id).await?;
+    broadcast_node_updated(&state.hub, &id);
     Ok(Json(node))
 }
 
 // ---------------------------------------------------------------------------
-// WS /ws/daemon — daemon WebSocket stub
+// WS /ws/daemon — daemon WebSocket
 // ---------------------------------------------------------------------------
 
 /// Expected daemon token for authentication.
@@ -505,6 +458,7 @@ fn expected_daemon_token() -> String {
 }
 
 async fn ws_daemon_handler(
+    State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
@@ -519,48 +473,260 @@ async fn ws_daemon_handler(
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
     }
 
-    ws.on_upgrade(handle_daemon_ws)
+    ws.on_upgrade(move |socket| handle_daemon_ws(socket, state))
 }
 
-async fn handle_daemon_ws(mut socket: ws::WebSocket) {
-    println!("Daemon WS connected");
+async fn handle_daemon_ws(socket: ws::WebSocket, state: Arc<AppState>) {
+    println!("[hub] Daemon WS connected");
 
-    while let Some(msg) = socket.recv().await {
+    // Create an mpsc channel so `dispatch_run` can send messages to this daemon
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Register daemon in hub
+    {
+        let mut hub = state.hub.write().unwrap();
+        hub.daemon = Some(tx);
+    }
+
+    // Run two concurrent tasks:
+    //   1. Forward outbound messages from the channel to the WS socket
+    //   2. Read inbound messages from the WS socket and process them
+    // We split the socket into sink + stream.
+    let (mut ws_sink, mut ws_stream) = {
+        use futures::StreamExt;
+        socket.split()
+    };
+
+    // Outbound task: forward hub -> daemon
+    let outbound = tokio::spawn(async move {
+        use futures::SinkExt;
+        while let Some(msg) = rx.recv().await {
+            if ws_sink.send(ws::Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Inbound task: process daemon -> backend messages
+    let pool = state.pool.clone();
+    let hub = Arc::clone(&state.hub);
+
+    while let Some(msg) = {
+        use futures::StreamExt;
+        ws_stream.next().await
+    } {
         match msg {
             Ok(ws::Message::Text(text)) => {
-                match serde_json::from_str::<WsDaemonMessage>(&text) {
-                    Ok(daemon_msg) => {
-                        match &daemon_msg {
-                            WsDaemonMessage::Event(event) => {
-                                println!(
-                                    "[daemon] RunEvent run_id={} seq={} type={} data={:?}",
-                                    event.run_id, event.seq, event.event_type, event.data_text
-                                );
-                            }
-                            WsDaemonMessage::Terminal(terminal) => {
-                                println!(
-                                    "[daemon] RunTerminal run_id={} status={} error={:?}",
-                                    terminal.run_id, terminal.status, terminal.error
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[daemon] Failed to parse message: {e}");
-                    }
+                if let Err(e) = process_daemon_message(&pool, &hub, &text).await {
+                    eprintln!("[hub] Error processing daemon message: {e}");
                 }
             }
             Ok(ws::Message::Close(_)) => {
-                println!("Daemon WS disconnected");
+                println!("[hub] Daemon WS closed gracefully");
                 break;
             }
             Ok(_) => {} // Ignore binary, ping, pong
             Err(e) => {
-                eprintln!("Daemon WS error: {e}");
+                eprintln!("[hub] Daemon WS error: {e}");
                 break;
             }
         }
     }
+
+    // Daemon disconnected: abort outbound task and clear hub entry
+    outbound.abort();
+
+    // Mark all running runs as failed
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = sqlx::query(
+        "UPDATE runs SET status = 'failed', ended_at = ? WHERE status = 'running'"
+    )
+    .bind(&now)
+    .execute(&pool)
+    .await
+    {
+        eprintln!("[hub] Failed to mark running runs as failed: {e}");
+    }
+
+    {
+        let mut hub_guard = hub.write().unwrap();
+        hub_guard.daemon = None;
+    }
+
+    println!("[hub] Daemon WS disconnected, running runs marked failed");
+}
+
+/// Process a single inbound message from the daemon.
+async fn process_daemon_message(
+    pool: &SqlitePool,
+    hub: &Arc<RwLock<Hub>>,
+    text: &str,
+) -> Result<(), String> {
+    let msg: WsDaemonMessage = serde_json::from_str(text)
+        .map_err(|e| format!("failed to parse daemon message: {e}"))?;
+
+    match msg {
+        WsDaemonMessage::Event(event) => {
+            let now = chrono::Utc::now().to_rfc3339();
+            let run_id = &event.run_id;
+
+            // Fetch the run to get node_id
+            let run_row = sqlx::query_as::<_, (String, String)>(
+                "SELECT node_id, status FROM runs WHERE id = ?"
+            )
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            let (node_id, current_status) = match run_row {
+                Some(r) => r,
+                None => {
+                    eprintln!("[hub] RunEvent for unknown run_id {run_id}");
+                    return Ok(());
+                }
+            };
+
+            // On first RunEvent: flip status to "running" and stamp started_at
+            if current_status == "dispatched" {
+                sqlx::query(
+                    "UPDATE runs SET status = 'running', started_at = ? WHERE id = ?"
+                )
+                .bind(&now)
+                .bind(run_id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+
+            // Write to run_events table
+            let event_id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO run_events (id, run_id, seq, event_type, data_text, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&event_id)
+            .bind(run_id)
+            .bind(event.seq)
+            .bind(&event.event_type)
+            .bind(&event.data_text)
+            .bind(&now)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            // Broadcast run:updated to all frontend clients
+            let msg = serde_json::json!({ "type": "run:updated", "id": run_id }).to_string();
+            hub.read().unwrap().broadcast(&msg);
+
+            let _ = node_id; // node_id available if needed for future broadcasts
+        }
+
+        WsDaemonMessage::Terminal(terminal) => {
+            let run_id = &terminal.run_id;
+            let now = chrono::Utc::now().to_rfc3339();
+
+            // Fetch node_id for this run
+            let run_row = sqlx::query_as::<_, (String,)>(
+                "SELECT node_id FROM runs WHERE id = ?"
+            )
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            let node_id = match run_row {
+                Some((nid,)) => nid,
+                None => {
+                    eprintln!("[hub] RunTerminal for unknown run_id {run_id}");
+                    return Ok(());
+                }
+            };
+
+            // Update run status in DB
+            sqlx::query(
+                "UPDATE runs SET status = ?, ended_at = ? WHERE id = ?"
+            )
+            .bind(&terminal.status)
+            .bind(&now)
+            .bind(run_id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            // Broadcast run:updated and node:updated
+            {
+                let hub_guard = hub.read().unwrap();
+                hub_guard.broadcast(
+                    &serde_json::json!({ "type": "run:updated", "id": run_id }).to_string()
+                );
+                hub_guard.broadcast(
+                    &serde_json::json!({ "type": "node:updated", "id": node_id }).to_string()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// WS /ws/frontend — frontend WebSocket
+// ---------------------------------------------------------------------------
+
+async fn ws_frontend_handler(
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+) -> axum::response::Response {
+    ws.on_upgrade(move |socket| handle_frontend_ws(socket, state))
+}
+
+async fn handle_frontend_ws(socket: ws::WebSocket, state: Arc<AppState>) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Register client in hub
+    let client_id = {
+        let mut hub = state.hub.write().unwrap();
+        hub.add_client(tx)
+    };
+
+    println!("[hub] Frontend client {} connected", client_id);
+
+    let (mut ws_sink, mut ws_stream) = {
+        use futures::StreamExt;
+        socket.split()
+    };
+
+    // Outbound: hub -> frontend
+    let outbound = tokio::spawn(async move {
+        use futures::SinkExt;
+        while let Some(msg) = rx.recv().await {
+            if ws_sink.send(ws::Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Inbound: frontend -> backend (receive-only, no processing needed)
+    while let Some(msg) = {
+        use futures::StreamExt;
+        ws_stream.next().await
+    } {
+        match msg {
+            Ok(ws::Message::Close(_)) => break,
+            Ok(_) => {} // Frontend sends nothing
+            Err(_) => break,
+        }
+    }
+
+    outbound.abort();
+
+    {
+        let mut hub = state.hub.write().unwrap();
+        hub.remove_client(client_id);
+    }
+
+    println!("[hub] Frontend client {} disconnected", client_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -590,6 +756,11 @@ async fn dispatch_run(
         if matches!(acceptance, Acceptance::Prose { .. }) {
             return Err(AppError::Unprocessable("requires_freeze".into()));
         }
+    }
+
+    // Enforcement rule 3: daemon must be connected (503 Service Unavailable)
+    if !state.hub.read().unwrap().has_daemon() {
+        return Err(AppError::ServiceUnavailable("no daemon connected".into()));
     }
 
     // Build the input_snapshot_json
@@ -642,9 +813,16 @@ async fn dispatch_run(
     .execute(&state.pool)
     .await?;
 
-    // Fire-and-forget WS dispatch to daemon (if connected)
-    // For now, we just log — actual WS hub implementation comes in CP05
-    println!("[dispatch] Run {} dispatched for node {}", run_id, node_id);
+    // Build RunDispatch and send to daemon
+    let dispatch = RunDispatch {
+        run_id: run_id.clone(),
+        input: run_input,
+        runtime: req.runtime.clone(),
+    };
+    let dispatch_json = serde_json::to_string(&dispatch)
+        .map_err(|e| AppError::Internal(format!("failed to serialize RunDispatch: {e}")))?;
+
+    state.hub.read().unwrap().send_to_daemon(&dispatch_json);
 
     Ok((
         StatusCode::CREATED,
@@ -737,6 +915,7 @@ async fn approve_node(
         .await?;
 
     let node = fetch_node(&state.pool, &id).await?;
+    broadcast_node_updated(&state.hub, &id);
     Ok(Json(node))
 }
 
@@ -780,6 +959,7 @@ async fn reject_node(
     }
 
     let node = fetch_node(&state.pool, &id).await?;
+    broadcast_node_updated(&state.hub, &id);
     Ok(Json(node))
 }
 

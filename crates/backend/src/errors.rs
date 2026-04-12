@@ -7,6 +7,7 @@ pub enum AppError {
     NotFound(String),
     BadRequest(String),
     Unprocessable(String),
+    ServiceUnavailable(String),
     Internal(String),
 }
 
@@ -16,6 +17,7 @@ impl std::fmt::Display for AppError {
             AppError::NotFound(msg) => write!(f, "Not found: {msg}"),
             AppError::BadRequest(msg) => write!(f, "Bad request: {msg}"),
             AppError::Unprocessable(msg) => write!(f, "Unprocessable: {msg}"),
+            AppError::ServiceUnavailable(msg) => write!(f, "Service unavailable: {msg}"),
             AppError::Internal(msg) => write!(f, "Internal error: {msg}"),
         }
     }
@@ -27,6 +29,7 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Unprocessable(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            AppError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         let body = serde_json::json!({ "error": message });
