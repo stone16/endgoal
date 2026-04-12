@@ -1,6 +1,6 @@
 use endgoal_shared::*;
-use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePoolOptions;
 use std::path::PathBuf;
 
 /// Returns the absolute path to the migrations directory.
@@ -100,10 +100,7 @@ async fn e2e_node_insert_and_round_trip() {
         id: row.get("id"),
         intent: row.get("intent"),
         parent_id: row.get("parent_id"),
-        phase: row
-            .get::<String, _>("phase")
-            .parse()
-            .unwrap(),
+        phase: row.get::<String, _>("phase").parse().unwrap(),
         acceptance_json: row.get("acceptance_json"),
         local_policy_json: row.get("local_policy_json"),
         canonical_artifact_text: row.get("canonical_artifact_text"),

@@ -4,7 +4,7 @@
 //! These tests implement AC1-AC9 from the CP06 acceptance criteria.
 
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::net::SocketAddr;
 use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 
@@ -17,10 +17,14 @@ async fn start_server() -> (SocketAddr, tempfile::TempDir) {
 
     // Enable ENDGOAL_LLM_STUB so no real LLM calls happen
     // Safety: test-only env mutation; tests run in separate processes
-    unsafe { std::env::set_var("ENDGOAL_LLM_STUB", "true"); }
+    unsafe {
+        std::env::set_var("ENDGOAL_LLM_STUB", "true");
+    }
 
     let pool = endgoal_backend::create_pool(&db_url).await.expect("pool");
-    endgoal_backend::run_migrations(&pool).await.expect("migrations");
+    endgoal_backend::run_migrations(&pool)
+        .await
+        .expect("migrations");
 
     let app = endgoal_backend::create_router(pool);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -208,12 +212,30 @@ async fn state_progress_formula_mixed_assertions_metric_rubric() {
     let state: Value = state_resp.json().await.unwrap();
 
     // Verify shape
-    assert!(state["state"].is_string(), "state.state should be string (Phase)");
-    assert!(state["progress"].is_number(), "state.progress should be number");
-    assert!(state["confidence"].is_number(), "state.confidence should be number");
-    assert!(state["next_step"].is_string(), "state.next_step should be string");
-    assert!(state["effective_policy"].is_object(), "state.effective_policy should be object");
-    assert!(state["rollup_blockers"].is_array(), "state.rollup_blockers should be array");
+    assert!(
+        state["state"].is_string(),
+        "state.state should be string (Phase)"
+    );
+    assert!(
+        state["progress"].is_number(),
+        "state.progress should be number"
+    );
+    assert!(
+        state["confidence"].is_number(),
+        "state.confidence should be number"
+    );
+    assert!(
+        state["next_step"].is_string(),
+        "state.next_step should be string"
+    );
+    assert!(
+        state["effective_policy"].is_object(),
+        "state.effective_policy should be object"
+    );
+    assert!(
+        state["rollup_blockers"].is_array(),
+        "state.rollup_blockers should be array"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -315,10 +337,19 @@ async fn state_endpoint_returns_correct_shape() {
     // Verify exact NodeState fields
     assert!(state.get("state").is_some(), "missing field: state");
     assert!(state.get("progress").is_some(), "missing field: progress");
-    assert!(state.get("confidence").is_some(), "missing field: confidence");
+    assert!(
+        state.get("confidence").is_some(),
+        "missing field: confidence"
+    );
     assert!(state.get("next_step").is_some(), "missing field: next_step");
-    assert!(state.get("effective_policy").is_some(), "missing field: effective_policy");
-    assert!(state.get("rollup_blockers").is_some(), "missing field: rollup_blockers");
+    assert!(
+        state.get("effective_policy").is_some(),
+        "missing field: effective_policy"
+    );
+    assert!(
+        state.get("rollup_blockers").is_some(),
+        "missing field: rollup_blockers"
+    );
 
     // Type checks
     assert!(state["state"].is_string());
@@ -457,7 +488,10 @@ async fn state_llm_stub_returns_mock_next_step() {
     let state: Value = resp.json().await.unwrap();
     let next_step = state["next_step"].as_str().unwrap();
     // With ENDGOAL_LLM_STUB=true, when canonical_artifact_text exists, should return "mock next_step"
-    assert!(!next_step.is_empty(), "next_step should be non-empty with stub");
+    assert!(
+        !next_step.is_empty(),
+        "next_step should be non-empty with stub"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -667,5 +701,9 @@ async fn state_parent_context_depth3_has_two_ancestors() {
     let snapshot: Value =
         serde_json::from_str(run["input_snapshot_json"].as_str().unwrap()).unwrap();
     let parent_ctx = snapshot["parent_context"].as_array().unwrap();
-    assert_eq!(parent_ctx.len(), 2, "depth-3 leaf should have 2 ancestors (root + mid)");
+    assert_eq!(
+        parent_ctx.len(),
+        2,
+        "depth-3 leaf should have 2 ancestors (root + mid)"
+    );
 }

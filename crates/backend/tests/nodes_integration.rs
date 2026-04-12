@@ -5,7 +5,7 @@
 //! All test names are prefixed with `nodes_` so `cargo test -- nodes` matches them.
 
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::net::SocketAddr;
 
 /// Helper: start the axum server on a random port with a temp DB, return (addr, tempdir_guard).
@@ -15,7 +15,9 @@ async fn start_server() -> (SocketAddr, tempfile::TempDir) {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
 
     let pool = endgoal_backend::create_pool(&db_url).await.expect("pool");
-    endgoal_backend::run_migrations(&pool).await.expect("migrations");
+    endgoal_backend::run_migrations(&pool)
+        .await
+        .expect("migrations");
 
     let app = endgoal_backend::create_router(pool);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -281,7 +283,11 @@ async fn nodes_get_children() {
     }
 
     let resp = client
-        .get(format!("{}/api/nodes/{}/children", base_url(addr), parent_id))
+        .get(format!(
+            "{}/api/nodes/{}/children",
+            base_url(addr),
+            parent_id
+        ))
         .send()
         .await
         .unwrap();
@@ -327,7 +333,11 @@ async fn nodes_ancestors_depth_3() {
     let leaf_id = leaf["id"].as_str().unwrap();
 
     let resp = client
-        .get(format!("{}/api/nodes/{}/ancestors", base_url(addr), leaf_id))
+        .get(format!(
+            "{}/api/nodes/{}/ancestors",
+            base_url(addr),
+            leaf_id
+        ))
         .send()
         .await
         .unwrap();
@@ -335,7 +345,10 @@ async fn nodes_ancestors_depth_3() {
     let ancestors: Vec<Value> = resp.json().await.unwrap();
     assert_eq!(ancestors.len(), 2, "depth-3 node should have 2 ancestors");
     assert_eq!(ancestors[0]["id"], root_id, "first ancestor should be root");
-    assert_eq!(ancestors[1]["id"], parent_id, "second ancestor should be parent");
+    assert_eq!(
+        ancestors[1]["id"], parent_id,
+        "second ancestor should be parent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +386,11 @@ async fn nodes_effective_policy_child_tightens() {
     let child_id = child["id"].as_str().unwrap();
 
     let resp = client
-        .get(format!("{}/api/nodes/{}/effective-policy", base_url(addr), child_id))
+        .get(format!(
+            "{}/api/nodes/{}/effective-policy",
+            base_url(addr),
+            child_id
+        ))
         .send()
         .await
         .unwrap();
@@ -412,7 +429,11 @@ async fn nodes_effective_policy_parent_only() {
     let child_id = child["id"].as_str().unwrap();
 
     let resp = client
-        .get(format!("{}/api/nodes/{}/effective-policy", base_url(addr), child_id))
+        .get(format!(
+            "{}/api/nodes/{}/effective-policy",
+            base_url(addr),
+            child_id
+        ))
         .send()
         .await
         .unwrap();
@@ -452,7 +473,11 @@ async fn nodes_effective_policy_review_required_or() {
     let child_id = child["id"].as_str().unwrap();
 
     let resp = client
-        .get(format!("{}/api/nodes/{}/effective-policy", base_url(addr), child_id))
+        .get(format!(
+            "{}/api/nodes/{}/effective-policy",
+            base_url(addr),
+            child_id
+        ))
         .send()
         .await
         .unwrap();
@@ -492,7 +517,11 @@ async fn nodes_effective_policy_allowed_tools_intersection() {
     let child_id = child["id"].as_str().unwrap();
 
     let resp = client
-        .get(format!("{}/api/nodes/{}/effective-policy", base_url(addr), child_id))
+        .get(format!(
+            "{}/api/nodes/{}/effective-policy",
+            base_url(addr),
+            child_id
+        ))
         .send()
         .await
         .unwrap();
@@ -530,7 +559,11 @@ async fn nodes_review_active_transitions_to_in_review() {
         .send()
         .await
         .unwrap();
-    assert_eq!(activate_resp.status(), 200, "activate should succeed with structured acceptance");
+    assert_eq!(
+        activate_resp.status(),
+        200,
+        "activate should succeed with structured acceptance"
+    );
 
     let review_resp = client
         .post(format!("{}/api/nodes/{}/review", base_url(addr), id))
@@ -624,7 +657,11 @@ async fn nodes_activate_with_prose_acceptance_returns_400() {
         .send()
         .await
         .unwrap();
-    assert_eq!(activate_resp.status(), 400, "Draft->Active with prose should fail");
+    assert_eq!(
+        activate_resp.status(),
+        400,
+        "Draft->Active with prose should fail"
+    );
 }
 
 #[tokio::test]
@@ -773,7 +810,11 @@ async fn nodes_e2e_three_level_hierarchy() {
 
     // 4. Verify ancestor chain for leaf: [root, mid]
     let ancestors_resp = client
-        .get(format!("{}/api/nodes/{}/ancestors", base_url(addr), leaf_id))
+        .get(format!(
+            "{}/api/nodes/{}/ancestors",
+            base_url(addr),
+            leaf_id
+        ))
         .send()
         .await
         .unwrap();
@@ -785,7 +826,11 @@ async fn nodes_e2e_three_level_hierarchy() {
 
     // 5. Verify effective policy for leaf
     let policy_resp = client
-        .get(format!("{}/api/nodes/{}/effective-policy", base_url(addr), leaf_id))
+        .get(format!(
+            "{}/api/nodes/{}/effective-policy",
+            base_url(addr),
+            leaf_id
+        ))
         .send()
         .await
         .unwrap();

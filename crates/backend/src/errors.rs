@@ -48,3 +48,67 @@ impl From<sqlx::Error> for AppError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_formats_each_error_variant() {
+        let cases = [
+            (AppError::NotFound("missing".into()), "Not found: missing"),
+            (AppError::BadRequest("bad".into()), "Bad request: bad"),
+            (AppError::Conflict("conflict".into()), "Conflict: conflict"),
+            (
+                AppError::Unprocessable("unprocessable".into()),
+                "Unprocessable: unprocessable",
+            ),
+            (
+                AppError::ServiceUnavailable("offline".into()),
+                "Service unavailable: offline",
+            ),
+            (AppError::Internal("boom".into()), "Internal error: boom"),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn into_response_maps_status_codes() {
+        let cases = [
+            (AppError::NotFound("missing".into()), StatusCode::NOT_FOUND),
+            (AppError::BadRequest("bad".into()), StatusCode::BAD_REQUEST),
+            (AppError::Conflict("conflict".into()), StatusCode::CONFLICT),
+            (
+                AppError::Unprocessable("unprocessable".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                AppError::ServiceUnavailable("offline".into()),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                AppError::Internal("boom".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+
+        for (error, expected_status) in cases {
+            assert_eq!(error.into_response().status(), expected_status);
+        }
+    }
+
+    #[test]
+    fn sqlx_error_conversion_preserves_row_not_found_special_case() {
+        assert!(matches!(
+            AppError::from(sqlx::Error::RowNotFound),
+            AppError::NotFound(message) if message == "resource not found"
+        ));
+        assert!(matches!(
+            AppError::from(sqlx::Error::ColumnNotFound("field".into())),
+            AppError::Internal(message) if message.contains("field")
+        ));
+    }
+}

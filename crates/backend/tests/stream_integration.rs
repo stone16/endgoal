@@ -130,7 +130,10 @@ async fn stream_completed_run_replays_all_events_and_closes() {
         stream_text.contains(r#""data_text":"second line""#),
         "{stream_text}"
     );
-    assert!(stream_text.contains(r#""data_text":"done""#), "{stream_text}");
+    assert!(
+        stream_text.contains(r#""data_text":"done""#),
+        "{stream_text}"
+    );
 
     let first = stream_text.find("first line").expect("first event");
     let second = stream_text.find("second line").expect("second event");

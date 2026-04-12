@@ -296,6 +296,18 @@ mod tests {
         assert!(adapter.is_none());
     }
 
+    #[test]
+    fn test_cli_adapters_build_streams_without_polling() {
+        let input = make_test_input("unused");
+        let tmp = tempfile::tempdir().unwrap();
+
+        let claude = ClaudeCodeAdapter;
+        let _claude_stream = claude.execute("claude-run", &input, tmp.path());
+
+        let codex = CodexAdapter;
+        let _codex_stream = codex.execute("codex-run", &input, tmp.path());
+    }
+
     #[tokio::test]
     async fn test_echo_adapter_produces_stdout_event() {
         let adapter = EchoAdapter;
@@ -309,11 +321,11 @@ mod tests {
         }
 
         // Should have at least one stdout event with "hello" and one terminal event
-        let stdout_events: Vec<_> = events
-            .iter()
-            .filter(|e| e.event_type == "stdout")
-            .collect();
-        assert!(!stdout_events.is_empty(), "expected at least one stdout event");
+        let stdout_events: Vec<_> = events.iter().filter(|e| e.event_type == "stdout").collect();
+        assert!(
+            !stdout_events.is_empty(),
+            "expected at least one stdout event"
+        );
         assert_eq!(stdout_events[0].data_text.as_deref(), Some("hello"));
         assert_eq!(stdout_events[0].run_id, "test-1");
 
@@ -407,11 +419,11 @@ mod tests {
             events.push(event);
         }
 
-        let stderr_events: Vec<_> = events
-            .iter()
-            .filter(|e| e.event_type == "stderr")
-            .collect();
-        assert!(!stderr_events.is_empty(), "expected at least one stderr event");
+        let stderr_events: Vec<_> = events.iter().filter(|e| e.event_type == "stderr").collect();
+        assert!(
+            !stderr_events.is_empty(),
+            "expected at least one stderr event"
+        );
         assert_eq!(stderr_events[0].data_text.as_deref(), Some("error_msg"));
     }
 
@@ -430,10 +442,7 @@ mod tests {
             events.push(event);
         }
 
-        let stdout_events: Vec<_> = events
-            .iter()
-            .filter(|e| e.event_type == "stdout")
-            .collect();
+        let stdout_events: Vec<_> = events.iter().filter(|e| e.event_type == "stdout").collect();
         assert_eq!(stdout_events.len(), 3);
         assert_eq!(stdout_events[0].data_text.as_deref(), Some("line1"));
         assert_eq!(stdout_events[1].data_text.as_deref(), Some("line2"));
@@ -451,15 +460,14 @@ mod tests {
             events.push(event);
         }
 
-        let stdout_events: Vec<_> = events
-            .iter()
-            .filter(|e| e.event_type == "stdout")
-            .collect();
+        let stdout_events: Vec<_> = events.iter().filter(|e| e.event_type == "stdout").collect();
         assert!(!stdout_events.is_empty());
         // On macOS, /tmp may resolve to /private/tmp
         let expected = tmp.path().canonicalize().unwrap();
         let actual_text = stdout_events[0].data_text.as_deref().unwrap();
-        let actual = std::path::PathBuf::from(actual_text).canonicalize().unwrap();
+        let actual = std::path::PathBuf::from(actual_text)
+            .canonicalize()
+            .unwrap();
         assert_eq!(actual, expected);
     }
 }

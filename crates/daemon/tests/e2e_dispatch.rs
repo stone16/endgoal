@@ -8,13 +8,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use axum::{
-    Router,
-    extract::WebSocketUpgrade,
-    response::IntoResponse,
-    routing::any,
-    extract::ws,
-};
+use axum::{Router, extract::WebSocketUpgrade, extract::ws, response::IntoResponse, routing::any};
 use endgoal_daemon::shared::types::*;
 use futures::SinkExt;
 
@@ -46,21 +40,19 @@ async fn handle_ws(mut socket: ws::WebSocket, state: BackendState) {
     // Collect all responses from the daemon
     while let Some(msg_result) = socket.recv().await {
         match msg_result {
-            Ok(ws::Message::Text(text)) => {
-                match serde_json::from_str::<WsDaemonMessage>(&text) {
-                    Ok(daemon_msg) => {
-                        let is_terminal = matches!(&daemon_msg, WsDaemonMessage::Terminal(_));
-                        state.received.lock().await.push(daemon_msg);
-                        if is_terminal {
-                            let _ = socket.close().await;
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[test-backend] Parse error: {e}, text: {text}");
+            Ok(ws::Message::Text(text)) => match serde_json::from_str::<WsDaemonMessage>(&text) {
+                Ok(daemon_msg) => {
+                    let is_terminal = matches!(&daemon_msg, WsDaemonMessage::Terminal(_));
+                    state.received.lock().await.push(daemon_msg);
+                    if is_terminal {
+                        let _ = socket.close().await;
+                        break;
                     }
                 }
-            }
+                Err(e) => {
+                    eprintln!("[test-backend] Parse error: {e}, text: {text}");
+                }
+            },
             Ok(ws::Message::Close(_)) => break,
             Ok(_) => {} // ignore ping/pong/binary
             Err(e) => {
@@ -148,7 +140,9 @@ async fn run_e2e_scenario(
                 panic!("Daemon client failed: {err}");
             }
             let received = state.received.lock().await;
-            let has_terminal = received.iter().any(|m| matches!(m, WsDaemonMessage::Terminal(_)));
+            let has_terminal = received
+                .iter()
+                .any(|m| matches!(m, WsDaemonMessage::Terminal(_)));
             if has_terminal {
                 break;
             }
@@ -157,7 +151,9 @@ async fn run_e2e_scenario(
         }
     });
 
-    timeout.await.expect("timed out waiting for terminal message");
+    timeout
+        .await
+        .expect("timed out waiting for terminal message");
 
     let result = state.received.lock().await.clone();
 

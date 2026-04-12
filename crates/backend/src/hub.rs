@@ -32,7 +32,11 @@ pub struct Hub {
 
 impl Hub {
     pub fn new() -> Self {
-        Hub { daemon: None, frontend_clients: HashMap::new(), next_client_id: 0 }
+        Hub {
+            daemon: None,
+            frontend_clients: HashMap::new(),
+            next_client_id: 0,
+        }
     }
 
     /// Register a new frontend client, returning its assigned ID.
@@ -68,5 +72,46 @@ impl Hub {
     /// Returns true if a daemon is currently connected.
     pub fn has_daemon(&self) -> bool {
         self.daemon.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hub_registers_removes_and_broadcasts_clients() {
+        let mut hub = Hub::new();
+        let (tx1, mut rx1) = mpsc::unbounded_channel();
+        let (tx2, mut rx2) = mpsc::unbounded_channel();
+
+        let id1 = hub.add_client(tx1);
+        let id2 = hub.add_client(tx2);
+        assert_ne!(id1, id2);
+
+        hub.broadcast("hello");
+        assert_eq!(rx1.try_recv().unwrap(), "hello");
+        assert_eq!(rx2.try_recv().unwrap(), "hello");
+
+        hub.remove_client(id1);
+        hub.broadcast("again");
+        assert!(rx1.try_recv().is_err());
+        assert_eq!(rx2.try_recv().unwrap(), "again");
+    }
+
+    #[test]
+    fn hub_reports_daemon_send_status() {
+        let mut hub = Hub::new();
+        assert!(!hub.has_daemon());
+        assert!(!hub.send_to_daemon("missing"));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        hub.daemon = Some(tx);
+        assert!(hub.has_daemon());
+        assert!(hub.send_to_daemon("dispatch"));
+        assert_eq!(rx.try_recv().unwrap(), "dispatch");
+
+        drop(rx);
+        assert!(!hub.send_to_daemon("closed"));
     }
 }

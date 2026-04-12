@@ -112,4 +112,14 @@ mod tests {
         let first = stream.next().await.unwrap().unwrap();
         assert_eq!(first, "mock proposal reflecting: make it more specific");
     }
+
+    #[tokio::test]
+    async fn stub_stream_returns_empty_when_cancelled() {
+        let client = StubLlmClient;
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let mut stream = client.stream("any prompt", token);
+        assert!(stream.next().await.is_none());
+    }
 }

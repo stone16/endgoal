@@ -49,14 +49,10 @@ pub async fn run_daemon_client(
         if let tungstenite::Message::Text(text) = msg {
             match serde_json::from_str::<RunDispatch>(&text) {
                 Ok(dispatch) => {
-                    let messages =
-                        handle_dispatch(&dispatch, scratchpad_root.as_deref()).await;
+                    let messages = handle_dispatch(&dispatch, scratchpad_root.as_deref()).await;
                     for ws_msg in messages {
                         let json = serde_json::to_string(&ws_msg).unwrap();
-                        if let Err(e) = write
-                            .send(tungstenite::Message::Text(json.into()))
-                            .await
-                        {
+                        if let Err(e) = write.send(tungstenite::Message::Text(json.into())).await {
                             eprintln!("WS write error: {e}");
                             return Err(e.into());
                         }
@@ -211,7 +207,10 @@ mod tests {
         let _messages = handle_dispatch(&dispatch, Some(tmp.path())).await;
 
         let scratchpad = tmp.path().join("run-scratch-test");
-        assert!(scratchpad.exists(), "scratchpad directory should be created");
+        assert!(
+            scratchpad.exists(),
+            "scratchpad directory should be created"
+        );
         assert!(scratchpad.is_dir());
     }
 
@@ -229,6 +228,12 @@ mod tests {
         } else {
             panic!("expected Terminal variant");
         }
+    }
+
+    #[tokio::test]
+    async fn test_run_daemon_client_rejects_invalid_ws_url() {
+        let result = run_daemon_client("ws:///missing-host", "token", None).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

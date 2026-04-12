@@ -826,6 +826,299 @@ mod tests {
         assert!((confidence - 0.8).abs() < 0.01);
     }
 
+    #[test]
+    fn test_parse_run_output_accepts_direct_run_output_and_rejects_unusable_shapes() {
+        let output_json = r#"{
+            "findings": "direct",
+            "concerns": ["c1"],
+            "confidence": 0.4,
+            "needs_human_review": true,
+            "assertion_results": [{"id":"a1","text":"done","status":"pass"}],
+            "metric_values": [],
+            "rubric_scores": []
+        }"#;
+
+        let direct = parse_run_output(r#"{"type":"prose","text":"anything"}"#, output_json)
+            .expect("direct run output");
+        assert_eq!(direct.findings, "direct");
+        assert!(direct.needs_human_review);
+        assert_eq!(direct.assertion_results[0].status, AssertionStatus::Pass);
+
+        assert!(
+            parse_run_output(
+                r#"{"type":"structured","assertions":[],"metrics":[],"rubric":[]}"#,
+                "not json"
+            )
+            .is_none()
+        );
+        assert!(
+            parse_run_output(
+                r#"{"type":"prose","text":"vague"}"#,
+                r#"{"assertion_results":{"a1":"pass"}}"#
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn test_parse_run_output_maps_unknown_values_to_pending_and_declared_fallbacks() {
+        let acceptance_json = r#"{"type":"structured","assertions":[
+            {"id":"a1","text":"known assertion","check_fn":"manual","status":"pending"}
+        ],"metrics":[
+            {"id":"m1","name":"known metric","baseline":10.0,"target":50.0,"unit":"pts"}
+        ],"rubric":[
+            {"id":"r1","dimension":"known rubric","scale":5.0,"description":"desc"}
+        ]}"#;
+        let output_json = r#"{
+            "assertion_results": {"a1": "unknown", "a2": "fail"},
+            "metric_values": {"m1": 25, "m2": 7},
+            "rubric_scores": {"r1": 4, "r2": 2},
+            "concerns": ["watch it"]
+        }"#;
+
+        let output = parse_run_output(acceptance_json, output_json).expect("mapped output");
+        assert_eq!(output.assertion_results[0].status, AssertionStatus::Pending);
+        assert!(
+            output
+                .assertion_results
+                .iter()
+                .any(|a| a.text == "a2" && a.status == AssertionStatus::Fail)
+        );
+        assert!(
+            output
+                .metric_values
+                .iter()
+                .any(|m| m.name == "known metric" && m.current == Some(25.0))
+        );
+        assert!(
+            output
+                .metric_values
+                .iter()
+                .any(|m| m.name == "m2" && m.target == 100.0)
+        );
+        assert!(
+            output
+                .rubric_scores
+                .iter()
+                .any(|r| r.dimension == "known rubric" && r.score == Some(4.0))
+        );
+        assert!(
+            output
+                .rubric_scores
+                .iter()
+                .any(|r| r.dimension == "r2" && r.scale == 10.0)
+        );
+        assert_eq!(output.concerns, vec!["watch it".to_string()]);
+    }
+
+    #[test]
+    fn test_progress_optional_layer_weighting_and_zero_scales() {
+        let metrics_only = r#"{"type":"structured","assertions":[],"metrics":[
+            {"id":"m1","name":"coverage","target":100.0}
+        ],"rubric":[]}"#;
+        let (progress, confidence) = compute_progress_and_confidence(
+            metrics_only,
+            &Some(make_output(vec![], vec![(60.0, 100.0)], vec![])),
+        );
+        assert!((progress - 60.0).abs() < 0.01);
+        assert_eq!(confidence, 0.0);
+
+        let rubric_only = r#"{"type":"structured","assertions":[],"metrics":[],"rubric":[
+            {"id":"r1","dimension":"quality","scale":10.0}
+        ]}"#;
+        let (progress, confidence) = compute_progress_and_confidence(
+            rubric_only,
+            &Some(make_output(vec![], vec![], vec![(8.0, 10.0)])),
+        );
+        assert!((progress - 80.0).abs() < 0.01);
+        assert!((confidence - 0.8).abs() < 0.01);
+
+        let assertions_rubric = r#"{"type":"structured","assertions":[
+            {"id":"a1","text":"a","status":"pending"}
+        ],"metrics":[],"rubric":[
+            {"id":"r1","dimension":"quality","scale":10.0}
+        ]}"#;
+        let (progress, _) = compute_progress_and_confidence(
+            assertions_rubric,
+            &Some(make_output(
+                vec![(AssertionStatus::Pass,)],
+                vec![],
+                vec![(6.0, 10.0)],
+            )),
+        );
+        assert!((progress - 86.68).abs() < 0.05);
+
+        let metrics_rubric = r#"{"type":"structured","assertions":[],"metrics":[
+            {"id":"m1","name":"coverage","target":100.0}
+        ],"rubric":[
+            {"id":"r1","dimension":"quality","scale":10.0}
+        ]}"#;
+        let (progress, _) = compute_progress_and_confidence(
+            metrics_rubric,
+            &Some(make_output(vec![], vec![(50.0, 100.0)], vec![(9.0, 10.0)])),
+        );
+        assert!((progress - 63.32).abs() < 0.05);
+
+        let no_declared_structured = r#"{"type":"prose","text":"fallback"}"#;
+        let (progress, confidence) = compute_progress_and_confidence(
+            no_declared_structured,
+            &Some(make_output(
+                vec![(AssertionStatus::Pass,)],
+                vec![(5.0, 0.0)],
+                vec![(5.0, 0.0)],
+            )),
+        );
+        assert!((progress - 40.0).abs() < 0.01);
+        assert_eq!(confidence, 0.0);
+    }
+
+    #[test]
+    fn test_progress_declared_layers_without_results() {
+        let empty_structured = r#"{"type":"structured","assertions":[],"metrics":[],"rubric":[]}"#;
+        let (progress, confidence) = compute_progress_and_confidence(
+            empty_structured,
+            &Some(make_output(vec![], vec![], vec![])),
+        );
+        assert_eq!(progress, 0.0);
+        assert_eq!(confidence, 0.0);
+
+        let assertions_missing_results = r#"{"type":"structured","assertions":[
+            {"id":"a1","text":"a","status":"pending"}
+        ],"metrics":[],"rubric":[]}"#;
+        let (progress, _) = compute_progress_and_confidence(
+            assertions_missing_results,
+            &Some(make_output(vec![], vec![], vec![])),
+        );
+        assert_eq!(progress, 0.0);
+
+        let assertions_and_metrics = r#"{"type":"structured","assertions":[
+            {"id":"a1","text":"a","status":"pending"}
+        ],"metrics":[
+            {"id":"m1","name":"coverage","target":100.0}
+        ],"rubric":[]}"#;
+        let (progress, _) = compute_progress_and_confidence(
+            assertions_and_metrics,
+            &Some(make_output(
+                vec![(AssertionStatus::Pass,)],
+                vec![(50.0, 100.0)],
+                vec![],
+            )),
+        );
+        assert!((progress - 75.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_state_at_merges_effective_policy_all_fields_with_zero_rollup_depth() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("policy.db");
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = crate::create_pool(&db_url).await.expect("pool");
+        crate::run_migrations(&pool).await.expect("migrations");
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO nodes (id, intent, phase, acceptance_json, local_policy_json, created_at, updated_at)
+             VALUES ('policy-root', 'Root', 'active', '{\"type\":\"structured\",\"assertions\":[],\"metrics\":[],\"rubric\":[]}', ?, ?, ?)",
+        )
+        .bind(r#"{"tokens_max":100,"iterations_max":10,"wallclock_max_s":60,"allowed_tools":["read","write"],"review_required":false}"#)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("insert root");
+        sqlx::query(
+            "INSERT INTO nodes (id, intent, parent_id, phase, acceptance_json, local_policy_json, created_at, updated_at)
+             VALUES ('policy-child', 'Child', 'policy-root', 'active', '{\"type\":\"structured\",\"assertions\":[],\"metrics\":[],\"rubric\":[]}', ?, ?, ?)",
+        )
+        .bind(r#"{"tokens_max":50,"iterations_max":8,"wallclock_max_s":30,"allowed_tools":["read"],"review_required":true}"#)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("insert child");
+
+        let llm = crate::llm::StubLlmClient;
+        let state = state_at(&pool, "policy-child", 0, &llm)
+            .await
+            .expect("state");
+
+        assert_eq!(state.effective_policy.tokens_max, Some(50));
+        assert_eq!(state.effective_policy.iterations_max, Some(8));
+        assert_eq!(state.effective_policy.wallclock_max_s, Some(30));
+        assert_eq!(
+            state.effective_policy.allowed_tools,
+            Some(vec!["read".to_string()])
+        );
+        assert_eq!(state.effective_policy.review_required, Some(true));
+        assert!(state.rollup_blockers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_compute_next_step_cache_paths() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("next_step.db");
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = crate::create_pool(&db_url).await.expect("pool");
+        crate::run_migrations(&pool).await.expect("migrations");
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO nodes (id, intent, phase, acceptance_json, created_at, updated_at)
+             VALUES ('cache-node', 'Cache node', 'active', '{\"type\":\"structured\",\"assertions\":[],\"metrics\":[],\"rubric\":[]}', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("insert node");
+
+        let llm = crate::llm::StubLlmClient;
+        let valid_cached = NodeStateRow {
+            id: "cache-node".to_string(),
+            intent: "Cache node".to_string(),
+            phase: "active".to_string(),
+            acceptance_json: r#"{"type":"structured","assertions":[],"metrics":[],"rubric":[]}"#
+                .to_string(),
+            canonical_artifact_text: Some("summary".to_string()),
+            canonical_updated_by_run_id: Some("run-1".to_string()),
+            next_step_cache: Some("cached step".to_string()),
+            next_step_cache_for_run_id: Some("run-1".to_string()),
+            local_policy_json: None,
+        };
+        assert_eq!(
+            compute_next_step(&pool, "cache-node", &valid_cached, &llm)
+                .await
+                .expect("cached"),
+            "cached step"
+        );
+
+        let stale_without_artifact = NodeStateRow {
+            next_step_cache: Some("stale".to_string()),
+            next_step_cache_for_run_id: None,
+            canonical_updated_by_run_id: None,
+            canonical_artifact_text: None,
+            ..valid_cached
+        };
+        let next_step = compute_next_step(&pool, "cache-node", &stale_without_artifact, &llm)
+            .await
+            .expect("static next step");
+        assert!(next_step.contains("No runs completed yet"));
+
+        let needs_llm = NodeStateRow {
+            canonical_artifact_text: Some("artifact".to_string()),
+            canonical_updated_by_run_id: Some("run-2".to_string()),
+            next_step_cache: Some("old".to_string()),
+            next_step_cache_for_run_id: Some("run-1".to_string()),
+            ..stale_without_artifact
+        };
+        assert_eq!(
+            compute_next_step(&pool, "cache-node", &needs_llm, &llm)
+                .await
+                .expect("llm next step"),
+            "mock next_step"
+        );
+    }
+
     #[tokio::test]
     async fn test_assemble_parent_context_depth3() {
         let tmp = tempfile::TempDir::new().expect("tempdir");

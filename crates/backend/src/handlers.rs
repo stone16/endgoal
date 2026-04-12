@@ -2002,3 +2002,331 @@ async fn compute_effective_policy(pool: &SqlitePool, node_id: &str) -> Result<Po
 
     Ok(merged)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy(
+        tokens_max: Option<u64>,
+        iterations_max: Option<u64>,
+        wallclock_max_s: Option<u64>,
+        allowed_tools: Option<Vec<&str>>,
+        review_required: Option<bool>,
+    ) -> Policy {
+        Policy {
+            tokens_max,
+            iterations_max,
+            wallclock_max_s,
+            allowed_tools: allowed_tools
+                .map(|tools| tools.into_iter().map(str::to_string).collect()),
+            review_required,
+        }
+    }
+
+    fn test_node() -> Node {
+        Node {
+            id: "node-1".to_string(),
+            intent: "ship the prototype".to_string(),
+            parent_id: None,
+            phase: Phase::Active,
+            acceptance_json: r#"{"type":"structured","assertions":[],"metrics":[],"rubric":[]}"#
+                .to_string(),
+            local_policy_json: None,
+            canonical_artifact_text: None,
+            canonical_updated_by_run_id: None,
+            next_step_cache: None,
+            next_step_cache_for_run_id: None,
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+            updated_at: "2026-04-12T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn policy_validation_rejects_loosening_and_unknown_shapes() {
+        let existing = policy(
+            Some(100),
+            Some(10),
+            Some(60),
+            Some(vec!["read", "write"]),
+            Some(true),
+        );
+        assert!(
+            validate_policy_monotonicity(
+                &existing,
+                &policy(Some(50), Some(5), Some(30), Some(vec!["read"]), Some(true))
+            )
+            .is_ok()
+        );
+
+        assert!(
+            validate_policy_monotonicity(&existing, &policy(Some(101), None, None, None, None))
+                .is_err()
+        );
+        assert!(
+            validate_policy_monotonicity(&existing, &policy(None, Some(11), None, None, None))
+                .is_err()
+        );
+        assert!(
+            validate_policy_monotonicity(&existing, &policy(None, None, Some(61), None, None))
+                .is_err()
+        );
+        assert!(
+            validate_policy_monotonicity(&existing, &policy(None, None, None, None, Some(false)))
+                .is_err()
+        );
+
+        assert!(validate_policy_value_keys(&serde_json::json!({"tokens_max": 50})).is_ok());
+        assert!(validate_policy_value_keys(&serde_json::json!(["tokens_max"])).is_err());
+        assert!(validate_policy_value_keys(&serde_json::json!({"reason": "too broad"})).is_err());
+
+        assert!(!policy_has_any_constraint(&policy(
+            None, None, None, None, None
+        )));
+        assert!(policy_has_any_constraint(&policy(
+            None,
+            None,
+            None,
+            Some(vec!["read"]),
+            None
+        )));
+    }
+
+    #[test]
+    fn freeze_layer_helpers_cover_all_layers() {
+        assert_eq!(next_freeze_layer("assertions"), Some("metrics"));
+        assert_eq!(next_freeze_layer("metrics"), Some("rubric"));
+        assert_eq!(next_freeze_layer("rubric"), None);
+        assert_eq!(next_freeze_layer("unexpected"), Some("assertions"));
+
+        assert_eq!(freeze_layer_label("assertions"), "assertion");
+        assert_eq!(freeze_layer_label("metrics"), "metric");
+        assert_eq!(freeze_layer_label("rubric"), "rubric");
+        assert_eq!(freeze_layer_label("unexpected"), "assertion");
+    }
+
+    #[test]
+    fn freeze_item_json_generates_layer_specific_unique_items() {
+        let node = test_node();
+        let approved = serde_json::to_string(&vec![
+            ApprovedFreezeItem {
+                layer: "assertions".to_string(),
+                item_json: r#"{"id":"a1","text":"old","status":"pending"}"#.to_string(),
+            },
+            ApprovedFreezeItem {
+                layer: "metrics".to_string(),
+                item_json: r#"{"id":"m1","name":"old","target":1.0}"#.to_string(),
+            },
+            ApprovedFreezeItem {
+                layer: "rubric".to_string(),
+                item_json: r#"{"id":"r1","dimension":"old","scale":10.0}"#.to_string(),
+            },
+        ])
+        .expect("approved json");
+
+        let assertion: serde_json::Value =
+            serde_json::from_str(&freeze_item_json("assertion", &node, &approved).unwrap())
+                .unwrap();
+        let metric: serde_json::Value =
+            serde_json::from_str(&freeze_item_json("metric", &node, &approved).unwrap()).unwrap();
+        let rubric: serde_json::Value =
+            serde_json::from_str(&freeze_item_json("rubric", &node, &approved).unwrap()).unwrap();
+        let fallback: serde_json::Value =
+            serde_json::from_str(&freeze_item_json("unknown", &node, &approved).unwrap()).unwrap();
+
+        assert_eq!(assertion["id"], "a2");
+        assert_eq!(metric["id"], "m2");
+        assert_eq!(rubric["id"], "r2");
+        assert_eq!(fallback["id"], "a2");
+        assert!(next_freeze_item_id("metric", "not json").is_err());
+        assert!(
+            next_freeze_item_id("metric", r#"[{"layer":"metrics","item_json":"not json"}]"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn structured_acceptance_from_items_handles_valid_and_invalid_layers() {
+        let approved = serde_json::to_string(&vec![
+            ApprovedFreezeItem {
+                layer: "assertion".to_string(),
+                item_json: r#"{"id":"a1","text":"done","status":"pending"}"#.to_string(),
+            },
+            ApprovedFreezeItem {
+                layer: "metric".to_string(),
+                item_json: r#"{"id":"m1","name":"completion","target":1.0}"#.to_string(),
+            },
+            ApprovedFreezeItem {
+                layer: "rubric".to_string(),
+                item_json: r#"{"id":"r1","dimension":"quality","scale":10.0}"#.to_string(),
+            },
+        ])
+        .expect("approved json");
+        let structured = structured_acceptance_from_approved_items(&approved).unwrap();
+        assert_eq!(structured.assertions.len(), 1);
+        assert_eq!(structured.metrics.len(), 1);
+        assert_eq!(structured.rubric.len(), 1);
+
+        assert!(structured_acceptance_from_approved_items("[]").is_err());
+        assert!(
+            structured_acceptance_from_approved_items(r#"[{"layer":"unknown","item_json":"{}"}]"#)
+                .is_err()
+        );
+        assert!(
+            structured_acceptance_from_approved_items(r#"[{"layer":"metric","item_json":"{}"}]"#)
+                .is_err()
+        );
+        assert!(
+            structured_acceptance_from_approved_items(r#"[{"layer":"rubric","item_json":"{}"}]"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn ensure_freeze_session_active_rejects_inactive_sessions() {
+        let active = FreezeSessionRow {
+            id: "s1".to_string(),
+            approved_items_json: "[]".to_string(),
+            current_layer: "assertions".to_string(),
+            status: "active".to_string(),
+        };
+        assert!(ensure_freeze_session_active(&active).is_ok());
+
+        let inactive = FreezeSessionRow {
+            status: "committed".to_string(),
+            ..active
+        };
+        assert!(ensure_freeze_session_active(&inactive).is_err());
+    }
+
+    #[tokio::test]
+    async fn live_stream_state_returns_pending_done_and_error_events() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let row = RunEventStreamRow {
+            run_id: "run-1".to_string(),
+            seq: 1,
+            event_type: "stdout".to_string(),
+            data_text: Some("hello".to_string()),
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+        let pending_state = RunEventLiveStreamState {
+            pool: pool.clone(),
+            run_id: "run-1".to_string(),
+            last_seq: 0,
+            pending: VecDeque::from([row]),
+            interval: tokio::time::interval(std::time::Duration::from_millis(1)),
+            done: false,
+        };
+        assert!(next_live_run_event(pending_state).await.is_some());
+
+        let done_state = RunEventLiveStreamState {
+            pool: pool.clone(),
+            run_id: "run-1".to_string(),
+            last_seq: 0,
+            pending: VecDeque::new(),
+            interval: tokio::time::interval(std::time::Duration::from_millis(1)),
+            done: true,
+        };
+        assert!(next_live_run_event(done_state).await.is_none());
+
+        pool.close().await;
+        let error_state = RunEventLiveStreamState {
+            pool,
+            run_id: "run-1".to_string(),
+            last_seq: 0,
+            pending: VecDeque::new(),
+            interval: tokio::time::interval(std::time::Duration::from_millis(1)),
+            done: false,
+        };
+        assert!(next_live_run_event(error_state).await.is_some());
+
+        let stream_row = RunEventStreamRow {
+            run_id: "run-2".to_string(),
+            seq: 2,
+            event_type: "stderr".to_string(),
+            data_text: None,
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+        let _ = run_event_stream_sse_event(stream_row);
+        let _ = run_event_stream_error_event("failed".to_string());
+    }
+
+    #[tokio::test]
+    async fn fetch_run_status_and_rows_cover_query_helpers() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("stream.db");
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = crate::create_pool(&db_url).await.expect("pool");
+        crate::run_migrations(&pool).await.expect("migrations");
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO nodes (id, intent, phase, acceptance_json, created_at, updated_at)
+             VALUES ('n1', 'Node', 'active', '{\"type\":\"structured\",\"assertions\":[],\"metrics\":[],\"rubric\":[]}', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO runs (id, node_id, type, status, runtime, input_snapshot_json, created_at)
+             VALUES ('r1', 'n1', 'research_iteration', 'completed', 'echo', '{}', ?)",
+        )
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO run_events (id, run_id, seq, event_type, data_text, created_at)
+             VALUES ('e1', 'r1', 1, 'stdout', 'hello', ?)",
+        )
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(fetch_run_status(&pool, "r1").await.unwrap(), "completed");
+        let rows = fetch_run_event_rows_after(&pool, "r1", 0).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(is_terminal_run_status("completed"));
+        assert!(is_terminal_run_status("complete"));
+        assert!(is_terminal_run_status("failed"));
+        assert!(!is_terminal_run_status("running"));
+
+        let normal_state = RunEventLiveStreamState {
+            pool: pool.clone(),
+            run_id: "r1".to_string(),
+            last_seq: 0,
+            pending: VecDeque::new(),
+            interval: tokio::time::interval(std::time::Duration::from_millis(1)),
+            done: false,
+        };
+        assert!(next_live_run_event(normal_state).await.is_some());
+
+        let app_state = Arc::new(AppState {
+            pool: pool.clone(),
+            hub: Arc::new(RwLock::new(Hub::new())),
+            llm: Arc::new(crate::llm::StubLlmClient),
+        });
+        assert!(
+            stream_run_events(State(Arc::clone(&app_state)), Path("r1".to_string()))
+                .await
+                .is_ok()
+        );
+
+        sqlx::query(
+            "INSERT INTO runs (id, node_id, type, status, runtime, input_snapshot_json, created_at)
+             VALUES ('r2', 'n1', 'research_iteration', 'running', 'echo', '{}', ?)",
+        )
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            stream_run_events(State(app_state), Path("r2".to_string()))
+                .await
+                .is_ok()
+        );
+    }
+}

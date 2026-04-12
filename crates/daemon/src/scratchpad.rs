@@ -80,6 +80,39 @@ mod tests {
     }
 
     #[test]
+    fn test_ensure_scratchpad_uses_env_root_wrapper() {
+        struct EnvGuard {
+            key: &'static str,
+            original: Option<std::ffi::OsString>,
+        }
+
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    if let Some(value) = &self.original {
+                        std::env::set_var(self.key, value);
+                    } else {
+                        std::env::remove_var(self.key);
+                    }
+                }
+            }
+        }
+
+        let tmp = tempdir().unwrap();
+        let _guard = EnvGuard {
+            key: "ENDGOAL_SCRATCHPAD_ROOT",
+            original: std::env::var_os("ENDGOAL_SCRATCHPAD_ROOT"),
+        };
+        unsafe {
+            std::env::set_var("ENDGOAL_SCRATCHPAD_ROOT", tmp.path());
+        }
+
+        let path = ensure_scratchpad("env-wrapper").unwrap();
+        assert_eq!(path, tmp.path().join("run-env-wrapper"));
+        assert!(path.exists());
+    }
+
+    #[test]
     fn test_scratchpad_naming_convention() {
         let tmp = tempdir().unwrap();
         let path = ensure_scratchpad_in(tmp.path(), "my-run-123").unwrap();
