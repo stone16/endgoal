@@ -11,6 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use std::{
+    collections::VecDeque,
     convert::Infallible,
     sync::{Arc, RwLock},
 };
@@ -138,6 +139,7 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/api/nodes/{id}/approve", post(approve_node))
         .route("/api/nodes/{id}/reject", post(reject_node))
         .route("/api/runs/{id}", get(get_run))
+        .route("/api/runs/{id}/stream", get(stream_run_events))
         .route("/api/runs/{id}/output", patch(patch_run_output))
         .route("/ws/daemon", any(ws_daemon_handler))
         .route("/ws/frontend", any(ws_frontend_handler))
@@ -930,6 +932,166 @@ async fn get_run(
 ) -> Result<Json<Run>, AppError> {
     let run = fetch_run(&state.pool, &run_id).await?;
     Ok(Json(run))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/runs/:id/stream — replay or live-stream run event rows as SSE
+// ---------------------------------------------------------------------------
+
+async fn stream_run_events(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> Result<Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>, AppError> {
+    use futures::StreamExt;
+
+    let run = fetch_run(&state.pool, &run_id).await?;
+
+    if is_terminal_run_status(&run.status) {
+        let rows = fetch_run_event_rows_after(&state.pool, &run_id, -1).await?;
+        let stream = futures::stream::iter(
+            rows.into_iter()
+                .map(|row| Ok(run_event_stream_sse_event(row))),
+        )
+        .boxed();
+        return Ok(Sse::new(stream));
+    }
+
+    let stream_state = RunEventLiveStreamState {
+        pool: state.pool.clone(),
+        run_id,
+        last_seq: -1,
+        pending: VecDeque::new(),
+        interval: tokio::time::interval(std::time::Duration::from_millis(200)),
+        done: false,
+    };
+    let stream = futures::stream::unfold(stream_state, next_live_run_event).boxed();
+    Ok(Sse::new(stream))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct RunEventStreamRow {
+    run_id: String,
+    seq: i64,
+    event_type: String,
+    data_text: Option<String>,
+    created_at: String,
+}
+
+struct RunEventLiveStreamState {
+    pool: SqlitePool,
+    run_id: String,
+    last_seq: i64,
+    pending: VecDeque<RunEventStreamRow>,
+    interval: tokio::time::Interval,
+    done: bool,
+}
+
+async fn next_live_run_event(
+    mut state: RunEventLiveStreamState,
+) -> Option<(Result<Event, Infallible>, RunEventLiveStreamState)> {
+    loop {
+        if let Some(row) = state.pending.pop_front() {
+            return Some((Ok(run_event_stream_sse_event(row)), state));
+        }
+
+        if state.done {
+            return None;
+        }
+
+        state.interval.tick().await;
+
+        match fetch_run_event_rows_after(&state.pool, &state.run_id, state.last_seq).await {
+            Ok(rows) => {
+                for row in rows {
+                    state.last_seq = state.last_seq.max(row.seq);
+                    state.pending.push_back(row);
+                }
+            }
+            Err(err) => {
+                state.done = true;
+                return Some((
+                    Ok(run_event_stream_error_event(format!(
+                        "failed to read run events: {err}"
+                    ))),
+                    state,
+                ));
+            }
+        }
+
+        match fetch_run_status(&state.pool, &state.run_id).await {
+            Ok(status) => {
+                if is_terminal_run_status(&status) {
+                    state.done = true;
+                }
+            }
+            Err(err) => {
+                state.done = true;
+                return Some((
+                    Ok(run_event_stream_error_event(format!(
+                        "failed to read run status: {err}"
+                    ))),
+                    state,
+                ));
+            }
+        }
+    }
+}
+
+async fn fetch_run_event_rows_after(
+    pool: &SqlitePool,
+    run_id: &str,
+    last_seq: i64,
+) -> Result<Vec<RunEventStreamRow>, sqlx::Error> {
+    sqlx::query_as::<_, RunEventStreamRow>(
+        "SELECT run_id, seq, event_type, data_text, created_at
+         FROM run_events
+         WHERE run_id = ? AND seq > ?
+         ORDER BY seq"
+    )
+    .bind(run_id)
+    .bind(last_seq)
+    .fetch_all(pool)
+    .await
+}
+
+async fn fetch_run_status(pool: &SqlitePool, run_id: &str) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+}
+
+fn is_terminal_run_status(status: &str) -> bool {
+    matches!(status, "completed" | "complete" | "failed")
+}
+
+fn run_event_stream_sse_event(row: RunEventStreamRow) -> Event {
+    let event_type = row.event_type.clone();
+    let body = serde_json::to_string(&row).unwrap_or_else(|err| {
+        serde_json::json!({
+            "run_id": row.run_id,
+            "seq": row.seq,
+            "event_type": "system",
+            "data_text": format!("failed to serialize run event: {err}"),
+            "created_at": row.created_at,
+        })
+        .to_string()
+    });
+
+    Event::default().event(event_type).data(body)
+}
+
+fn run_event_stream_error_event(message: String) -> Event {
+    let body = serde_json::json!({
+        "run_id": null,
+        "seq": null,
+        "event_type": "system",
+        "data_text": message,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    })
+    .to_string();
+
+    Event::default().event("system").data(body)
 }
 
 // ---------------------------------------------------------------------------
