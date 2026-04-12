@@ -30,3 +30,7 @@ Thumbs.db
 runs/
 *.log
 *.pid
+.harness/*/
+!.harness/retro/
+!.harness/retro/**
+!.harness/config.json
