@@ -2,20 +2,27 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State, WebSocketUpgrade, ws},
     http::StatusCode,
-    response::IntoResponse,
+    response::{
+        IntoResponse,
+        sse::{Event, Sse},
+    },
     routing::{any, get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
-use std::sync::{Arc, RwLock};
+use std::{
+    convert::Infallible,
+    sync::{Arc, RwLock},
+};
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 
 use crate::errors::AppError;
 use crate::hub::Hub;
 use crate::llm::{LlmClient, create_llm_client};
 use crate::shared::types::{
-    Acceptance, AncestorSummary, Node, NodeState, Phase, Policy, Run, RunDispatch, RunInput,
-    WsDaemonMessage,
+    Acceptance, AncestorSummary, Assertion, FreezeProposal, Metric, Node, NodeState, Phase, Policy,
+    RubricDimension, Run, RunDispatch, RunInput, StructuredAcceptance, WsDaemonMessage,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +63,31 @@ pub struct DispatchRunRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FreezeRespondRequest {
+    pub session_id: String,
+    pub user_response: String,
+    pub action: String,
+    pub approved_item_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FreezeCommitRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FreezeActiveResponse {
+    pub session_id: String,
+    pub approved_items_json: String,
+    pub current_layer: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FreezeStartResponse {
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RejectNodeRequest {
     pub tighter_policy: Option<serde_json::Value>,
 }
@@ -93,6 +125,16 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/api/nodes/{id}/activate", post(activate_node))
         .route("/api/nodes/{id}/review", post(review_node))
         .route("/api/nodes/{id}/runs", get(list_runs).post(dispatch_run))
+        .route(
+            "/api/nodes/{id}/freeze/active",
+            get(get_active_freeze_session),
+        )
+        .route("/api/nodes/{id}/freeze/start", post(start_freeze_session))
+        .route(
+            "/api/nodes/{id}/freeze/respond",
+            post(respond_freeze_session),
+        )
+        .route("/api/nodes/{id}/freeze/commit", post(commit_freeze_session))
         .route("/api/nodes/{id}/approve", post(approve_node))
         .route("/api/nodes/{id}/reject", post(reject_node))
         .route("/api/runs/{id}", get(get_run))
@@ -916,6 +958,218 @@ async fn patch_run_output(
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/nodes/:id/freeze/active — active freeze session if one exists
+// ---------------------------------------------------------------------------
+
+async fn get_active_freeze_session(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+) -> Result<Json<Option<FreezeActiveResponse>>, AppError> {
+    let _ = fetch_node(&state.pool, &node_id).await?;
+
+    let row = sqlx::query_as::<_, FreezeSessionRow>(
+        "SELECT id, approved_items_json, current_layer, status
+         FROM freeze_sessions
+         WHERE node_id = ? AND status = 'active'
+         ORDER BY created_at DESC
+         LIMIT 1",
+    )
+    .bind(&node_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    Ok(Json(row.map(|session| FreezeActiveResponse {
+        session_id: session.id,
+        approved_items_json: session.approved_items_json,
+        current_layer: session.current_layer,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/freeze/start — begin a freeze session
+// ---------------------------------------------------------------------------
+
+async fn start_freeze_session(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+) -> Result<(StatusCode, Json<FreezeStartResponse>), AppError> {
+    let _ = fetch_node(&state.pool, &node_id).await?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE freeze_sessions
+         SET status = 'abandoned', updated_at = ?
+         WHERE node_id = ? AND status = 'active'",
+    )
+    .bind(&now)
+    .bind(&node_id)
+    .execute(&state.pool)
+    .await?;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO freeze_sessions (
+             id, node_id, approved_items_json, current_layer, status, created_at, updated_at
+         ) VALUES (?, ?, '[]', 'assertions', 'active', ?, ?)",
+    )
+    .bind(&session_id)
+    .bind(&node_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.pool)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(FreezeStartResponse { session_id }),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/freeze/respond — persist response and stream next item
+// ---------------------------------------------------------------------------
+
+async fn respond_freeze_session(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+    Json(req): Json<FreezeRespondRequest>,
+) -> Result<Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>, AppError> {
+    use futures::StreamExt;
+
+    let mut session = fetch_freeze_session(&state.pool, &node_id, &req.session_id).await?;
+    ensure_freeze_session_active(&session)?;
+
+    match req.action.as_str() {
+        "start" | "reject" => {}
+        "approve" | "edit" => {
+            let approved_item_json = req.approved_item_json.ok_or_else(|| {
+                AppError::BadRequest("approved_item_json is required for approve/edit".into())
+            })?;
+            append_approved_item(
+                &state.pool,
+                &session.id,
+                &session.current_layer,
+                &approved_item_json,
+            )
+            .await?;
+            session = fetch_freeze_session(&state.pool, &node_id, &req.session_id).await?;
+        }
+        "skip_layer" => {
+            let next_layer = next_freeze_layer(&session.current_layer);
+            let stored_layer = next_layer.unwrap_or("complete");
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "UPDATE freeze_sessions SET current_layer = ?, updated_at = ? WHERE id = ?",
+            )
+            .bind(stored_layer)
+            .bind(&now)
+            .bind(&session.id)
+            .execute(&state.pool)
+            .await?;
+
+            let body = serde_json::json!({
+                "event_type": "layer_complete",
+                "layer": freeze_layer_label(&session.current_layer),
+                "next_layer": next_layer,
+            })
+            .to_string();
+            let stream = futures::stream::once(async move {
+                Ok(Event::default().event("layer_complete").data(body))
+            })
+            .boxed();
+            return Ok(Sse::new(stream));
+        }
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "unsupported freeze response action: {other}"
+            )));
+        }
+    }
+
+    let node = fetch_node(&state.pool, &node_id).await?;
+    let prompt = build_freeze_prompt(&state.pool, &node, &session, &req.user_response).await?;
+    let layer = freeze_layer_label(&session.current_layer).to_string();
+    let item_json = freeze_item_json(&layer, &node)?;
+    let source_quote = node.intent.clone();
+    let cancellation_token = CancellationToken::new();
+    let cancel_on_drop = CancelOnDrop(cancellation_token.clone());
+    let mut llm_stream = state.llm.stream(&prompt, cancellation_token);
+    let stream = futures::stream::once(async move {
+        let _cancel_on_drop = cancel_on_drop;
+        let reasoning = match llm_stream.next().await {
+            Some(Ok(chunk)) => chunk,
+            Some(Err(err)) => format!("proposal stream error: {err}"),
+            None => "No proposal reasoning returned".to_string(),
+        };
+        let proposal = FreezeProposal {
+            event_type: "proposal".to_string(),
+            layer,
+            item_json,
+            reasoning,
+            source_quote,
+        };
+        let body = serde_json::to_string(&proposal).unwrap_or_else(|err| {
+            serde_json::json!({
+                "event_type": "error",
+                "message": format!("failed to serialize freeze proposal: {err}"),
+            })
+            .to_string()
+        });
+        Ok(Event::default().event("proposal").data(body))
+    })
+    .boxed();
+
+    Ok(Sse::new(stream))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/freeze/commit — write structured acceptance
+// ---------------------------------------------------------------------------
+
+async fn commit_freeze_session(
+    State(state): State<Arc<AppState>>,
+    Path(node_id): Path<String>,
+    Json(req): Json<FreezeCommitRequest>,
+) -> Result<Json<Node>, AppError> {
+    let session = fetch_freeze_session(&state.pool, &node_id, &req.session_id).await?;
+
+    if session.status == "committed" {
+        return Err(AppError::Conflict(
+            "freeze session already committed".into(),
+        ));
+    }
+    ensure_freeze_session_active(&session)?;
+
+    let acceptance = structured_acceptance_from_approved_items(&session.approved_items_json)?;
+    let acceptance_json = serde_json::to_string(&Acceptance::Structured(acceptance))
+        .map_err(|e| AppError::Internal(format!("failed to serialize acceptance: {e}")))?;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "UPDATE nodes
+         SET acceptance_json = ?,
+             phase = CASE WHEN phase = 'draft' THEN 'active' ELSE phase END,
+             updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(&acceptance_json)
+    .bind(&now)
+    .bind(&node_id)
+    .execute(&state.pool)
+    .await?;
+
+    sqlx::query("UPDATE freeze_sessions SET status = 'committed', updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&session.id)
+        .execute(&state.pool)
+        .await?;
+
+    let node = fetch_node(&state.pool, &node_id).await?;
+    broadcast_node_updated(&state.hub, &node_id);
+    Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/nodes/:id/approve — In-Review -> Complete
 // ---------------------------------------------------------------------------
 
@@ -992,6 +1246,28 @@ async fn reject_node(
 // DB helper types and functions
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, sqlx::FromRow)]
+struct FreezeSessionRow {
+    id: String,
+    approved_items_json: String,
+    current_layer: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ApprovedFreezeItem {
+    layer: String,
+    item_json: String,
+}
+
+struct CancelOnDrop(CancellationToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 /// Row type for sqlx query_as. Mirrors the nodes table columns.
 #[derive(Debug, sqlx::FromRow)]
 struct NodeRow {
@@ -1026,6 +1302,190 @@ impl NodeRow {
             updated_at: self.updated_at,
         }
     }
+}
+
+async fn fetch_freeze_session(
+    pool: &SqlitePool,
+    node_id: &str,
+    session_id: &str,
+) -> Result<FreezeSessionRow, AppError> {
+    sqlx::query_as::<_, FreezeSessionRow>(
+        "SELECT id, approved_items_json, current_layer, status
+         FROM freeze_sessions
+         WHERE id = ? AND node_id = ?",
+    )
+    .bind(session_id)
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("freeze session {session_id} not found")))
+}
+
+fn ensure_freeze_session_active(session: &FreezeSessionRow) -> Result<(), AppError> {
+    if session.status != "active" {
+        return Err(AppError::Conflict(format!(
+            "freeze session is not active: {}",
+            session.status
+        )));
+    }
+
+    Ok(())
+}
+
+async fn append_approved_item(
+    pool: &SqlitePool,
+    session_id: &str,
+    layer: &str,
+    item_json: &str,
+) -> Result<(), AppError> {
+    let current_json: String =
+        sqlx::query_scalar("SELECT approved_items_json FROM freeze_sessions WHERE id = ?")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await?;
+    let mut items = parse_approved_items(&current_json)?;
+    items.push(ApprovedFreezeItem {
+        layer: layer.to_string(),
+        item_json: item_json.to_string(),
+    });
+    let next_json = serde_json::to_string(&items)
+        .map_err(|e| AppError::Internal(format!("failed to serialize approved items: {e}")))?;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query("UPDATE freeze_sessions SET approved_items_json = ?, updated_at = ? WHERE id = ?")
+        .bind(&next_json)
+        .bind(&now)
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+fn parse_approved_items(approved_items_json: &str) -> Result<Vec<ApprovedFreezeItem>, AppError> {
+    serde_json::from_str(approved_items_json)
+        .map_err(|e| AppError::BadRequest(format!("invalid approved_items_json: {e}")))
+}
+
+fn next_freeze_layer(layer: &str) -> Option<&'static str> {
+    match layer {
+        "assertions" => Some("metrics"),
+        "metrics" => Some("rubric"),
+        "rubric" => None,
+        _ => Some("assertions"),
+    }
+}
+
+fn freeze_layer_label(layer: &str) -> &'static str {
+    match layer {
+        "assertions" => "assertion",
+        "metrics" => "metric",
+        "rubric" => "rubric",
+        _ => "assertion",
+    }
+}
+
+async fn build_freeze_prompt(
+    pool: &SqlitePool,
+    node: &Node,
+    session: &FreezeSessionRow,
+    user_response: &str,
+) -> Result<String, AppError> {
+    let ancestors = fetch_ancestor_nodes(pool, &node.id).await?;
+    let docs: Vec<String> = sqlx::query_scalar("SELECT content FROM node_docs WHERE node_id = ?")
+        .bind(&node.id)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(format!(
+        "Node intent: {}\nCurrent layer: {}\nUser response: {}\nApproved items: {}\nParent context: {}\nDocs: {}",
+        node.intent,
+        session.current_layer,
+        user_response,
+        session.approved_items_json,
+        serde_json::to_string(&ancestors)
+            .map_err(|e| AppError::Internal(format!("failed to serialize ancestors: {e}")))?,
+        serde_json::to_string(&docs)
+            .map_err(|e| AppError::Internal(format!("failed to serialize docs: {e}")))?,
+    ))
+}
+
+fn freeze_item_json(layer: &str, node: &Node) -> Result<String, AppError> {
+    let value = match layer {
+        "assertion" => serde_json::json!({
+            "id": "a1",
+            "text": format!("{} is satisfied", node.intent),
+            "status": "pending"
+        }),
+        "metric" => serde_json::json!({
+            "id": "m1",
+            "name": "completion",
+            "target": 1.0
+        }),
+        "rubric" => serde_json::json!({
+            "id": "r1",
+            "dimension": "quality",
+            "scale": 10.0
+        }),
+        _ => serde_json::json!({
+            "id": "a1",
+            "text": format!("{} is satisfied", node.intent),
+            "status": "pending"
+        }),
+    };
+
+    serde_json::to_string(&value)
+        .map_err(|e| AppError::Internal(format!("failed to serialize freeze item: {e}")))
+}
+
+fn structured_acceptance_from_approved_items(
+    approved_items_json: &str,
+) -> Result<StructuredAcceptance, AppError> {
+    let items = parse_approved_items(approved_items_json)?;
+    if items.is_empty() {
+        return Err(AppError::BadRequest(
+            "cannot commit freeze session without approved items".into(),
+        ));
+    }
+
+    let mut assertions = Vec::new();
+    let mut metrics = Vec::new();
+    let mut rubric = Vec::new();
+
+    for item in items {
+        match item.layer.as_str() {
+            "assertions" | "assertion" => {
+                assertions.push(serde_json::from_str::<Assertion>(&item.item_json).map_err(
+                    |e| AppError::BadRequest(format!("invalid assertion item_json: {e}")),
+                )?);
+            }
+            "metrics" | "metric" => {
+                metrics.push(
+                    serde_json::from_str::<Metric>(&item.item_json).map_err(|e| {
+                        AppError::BadRequest(format!("invalid metric item_json: {e}"))
+                    })?,
+                );
+            }
+            "rubric" => {
+                rubric.push(
+                    serde_json::from_str::<RubricDimension>(&item.item_json).map_err(|e| {
+                        AppError::BadRequest(format!("invalid rubric item_json: {e}"))
+                    })?,
+                );
+            }
+            other => {
+                return Err(AppError::BadRequest(format!(
+                    "unknown approved item layer: {other}"
+                )));
+            }
+        }
+    }
+
+    Ok(StructuredAcceptance {
+        assertions,
+        metrics,
+        rubric,
+    })
 }
 
 /// Minimal row for the effective_policy CTE.

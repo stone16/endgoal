@@ -10,6 +10,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
+use tokio_util::sync::CancellationToken;
 
 use crate::errors::AppError;
 
@@ -26,6 +27,7 @@ pub trait LlmClient: Send + Sync {
     fn stream(
         &self,
         prompt: &str,
+        cancellation_token: CancellationToken,
     ) -> Pin<Box<dyn Stream<Item = Result<String, AppError>> + Send>>;
 }
 
@@ -46,7 +48,12 @@ impl LlmClient for StubLlmClient {
     fn stream(
         &self,
         _prompt: &str,
+        cancellation_token: CancellationToken,
     ) -> Pin<Box<dyn Stream<Item = Result<String, AppError>> + Send>> {
+        if cancellation_token.is_cancelled() {
+            return Box::pin(futures::stream::empty());
+        }
+
         let items = vec![Ok("mock proposal".to_string())];
         Box::pin(futures::stream::iter(items))
     }
@@ -78,7 +85,7 @@ mod tests {
     #[tokio::test]
     async fn stub_stream_returns_mock_proposal() {
         let client = StubLlmClient;
-        let mut stream = client.stream("any prompt");
+        let mut stream = client.stream("any prompt", CancellationToken::new());
         let first = stream.next().await.unwrap().unwrap();
         assert_eq!(first, "mock proposal");
         // Stream should have only one item
