@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PhaseBadge } from "@/features/nodes/components/phase-badge";
 import { ProgressBar } from "@/features/nodes/components/progress-bar";
@@ -12,6 +12,7 @@ import { RunsList } from "@/features/panel/components/runs-list";
 import { useNodePanelData } from "@/features/panel/hooks/use-node-panel-data";
 import { useRunTrigger } from "@/features/panel/hooks/use-run-trigger";
 import { RunDetailOverlay } from "@/features/runs/run-detail-overlay";
+import { approveNode, rejectNode, type RejectNodeRequest } from "@/lib/api";
 
 type NodePanelProps = {
   nodeId: string | null;
@@ -26,6 +27,9 @@ type SelectedRun = {
 export function NodePanel({ nodeId, onClose }: NodePanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   const [selectedRun, setSelectedRun] = useState<SelectedRun | null>(null);
+  const [reviewReason, setReviewReason] = useState("");
+  const [reviewActionError, setReviewActionError] = useState<string | null>(null);
+  const [isReviewActionBusy, setIsReviewActionBusy] = useState(false);
   const { node, state, acceptance, runs, isLoading, error, refresh } =
     useNodePanelData(nodeId);
   const runTrigger = useRunTrigger({
@@ -36,6 +40,74 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
 
   const selectedRunId =
     selectedRun && selectedRun.nodeId === nodeId ? selectedRun.runId : null;
+
+  const buildRejectRequest = useCallback((): RejectNodeRequest | undefined => {
+    const trimmed = reviewReason.trim();
+
+    if (!trimmed) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
+        return { tighter_policy: parsed as Record<string, unknown> };
+      }
+    } catch {
+      // Plain-text reasons are sent as policy context for the backend audit path.
+    }
+
+    return { tighter_policy: { reason: trimmed } };
+  }, [reviewReason]);
+
+  const approveReview = useCallback(async () => {
+    if (!node) {
+      return;
+    }
+
+    setIsReviewActionBusy(true);
+    setReviewActionError(null);
+
+    try {
+      await approveNode(node.id);
+      setReviewReason("");
+      await refresh();
+    } catch (approveError) {
+      setReviewActionError(
+        approveError instanceof Error
+          ? approveError.message
+          : "Approval failed",
+      );
+    } finally {
+      setIsReviewActionBusy(false);
+    }
+  }, [node, refresh]);
+
+  const rejectReview = useCallback(async () => {
+    if (!node) {
+      return;
+    }
+
+    setIsReviewActionBusy(true);
+    setReviewActionError(null);
+
+    try {
+      await rejectNode(node.id, buildRejectRequest());
+      setReviewReason("");
+      await refresh();
+    } catch (rejectError) {
+      setReviewActionError(
+        rejectError instanceof Error ? rejectError.message : "Rejection failed",
+      );
+    } finally {
+      setIsReviewActionBusy(false);
+    }
+  }, [buildRejectRequest, node, refresh]);
 
   useEffect(() => {
     if (!nodeId) {
@@ -161,10 +233,21 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
                 }}
               />
               <PanelActions
+                phase={node.phase}
+                isReviewActionBusy={isReviewActionBusy}
                 isTriggerRunBusy={runTrigger.isDispatching}
+                onApproveReview={() => {
+                  void approveReview();
+                }}
+                onRejectReview={() => {
+                  void rejectReview();
+                }}
+                onReviewReasonChange={setReviewReason}
                 onTriggerRun={() => {
                   void runTrigger.triggerRun();
                 }}
+                reviewActionError={reviewActionError}
+                reviewReason={reviewReason}
                 triggerRunDisabled={!node}
               />
             </div>

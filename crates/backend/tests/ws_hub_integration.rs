@@ -152,18 +152,27 @@ async fn ws_full_roundtrip_frontend_receives_run_updated() {
         .await
         .expect("daemon send event");
 
-    // 6. Frontend receives { type: "run:updated", id: run_id } within 2s
-    let frontend_msg = timeout(Duration::from_secs(2), frontend_stream.next())
-        .await
-        .expect("frontend should receive run:updated within 2s")
-        .expect("frontend stream not closed")
-        .expect("frontend WS message");
+    // 6. Frontend receives { type: "run:updated", id: run_id } within 2s.
+    // The frontend socket may already have setup node:updated messages queued
+    // from create/activate, so ignore unrelated broadcasts.
+    let msg_json = loop {
+        let frontend_msg = timeout(Duration::from_secs(2), frontend_stream.next())
+            .await
+            .expect("frontend should receive run:updated within 2s")
+            .expect("frontend stream not closed")
+            .expect("frontend WS message");
 
-    let msg_text = match frontend_msg {
-        Message::Text(t) => t,
-        other => panic!("expected Text, got: {:?}", other),
+        let msg_text = match frontend_msg {
+            Message::Text(t) => t,
+            other => panic!("expected Text, got: {:?}", other),
+        };
+        let msg_json: Value = serde_json::from_str(&msg_text).unwrap();
+
+        if msg_json["type"] == "run:updated" {
+            break msg_json;
+        }
     };
-    let msg_json: Value = serde_json::from_str(&msg_text).unwrap();
+
     assert_eq!(msg_json["type"], "run:updated", "frontend should receive run:updated");
     assert_eq!(msg_json["id"], run_id, "frontend should receive correct run_id");
 

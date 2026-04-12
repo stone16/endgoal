@@ -167,6 +167,33 @@ export function getRunEventStreamUrl(id: string): string {
   return buildUrl(`/api/runs/${encodeURIComponent(id)}/stream`);
 }
 
+export function approveNode(id: string): Promise<Node> {
+  return requestJson<Node>(`/api/nodes/${encodeURIComponent(id)}/approve`, {
+    method: "POST",
+  });
+}
+
+export type RejectNodeRequest = {
+  tighter_policy?: Record<string, unknown>;
+};
+
+export function rejectNode(
+  id: string,
+  request?: RejectNodeRequest,
+): Promise<Node> {
+  return requestJson<Node>(`/api/nodes/${encodeURIComponent(id)}/reject`, {
+    method: "POST",
+    ...(request
+      ? {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(request),
+        }
+      : {}),
+  });
+}
+
 export type NodeAncestorsResponse = AncestorSummary[];
 
 export type FreezeActiveSession = {

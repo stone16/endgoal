@@ -15,7 +15,8 @@ use sqlx::sqlite::SqlitePool;
 use crate::errors::AppError;
 use crate::llm::LlmClient;
 use crate::shared::types::{
-    AncestorSummary, AssertionStatus, NodeState, Phase, Policy, RunOutput,
+    Acceptance, AncestorSummary, Assertion, AssertionStatus, Metric, NodeState, Phase, Policy,
+    RubricDimension, RunOutput,
 };
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ pub async fn state_at(
     // 3. Parse RunOutput if present
     let run_output: Option<RunOutput> = run_output_row
         .and_then(|r| r.output_json)
-        .and_then(|json_str| serde_json::from_str::<RunOutput>(&json_str).ok());
+        .and_then(|json_str| parse_run_output(&node.acceptance_json, &json_str));
 
     // 4. Compute progress and confidence
     let (progress, confidence) = compute_progress_and_confidence(&node.acceptance_json, &run_output);
@@ -137,6 +138,125 @@ pub async fn state_at(
         effective_policy,
         rollup_blockers,
     })
+}
+
+fn parse_run_output(acceptance_json: &str, output_json: &str) -> Option<RunOutput> {
+    if let Ok(output) = serde_json::from_str::<RunOutput>(output_json) {
+        return Some(output);
+    }
+
+    let value: serde_json::Value = serde_json::from_str(output_json).ok()?;
+    let structured = match serde_json::from_str::<Acceptance>(acceptance_json).ok()? {
+        Acceptance::Structured(structured) => structured,
+        Acceptance::Prose { .. } => return None,
+    };
+
+    let assertion_results = value
+        .get("assertion_results")
+        .and_then(serde_json::Value::as_object)
+        .map(|results| {
+            results
+                .iter()
+                .map(|(id, status)| {
+                    let declared = structured
+                        .assertions
+                        .iter()
+                        .find(|assertion| assertion.id == *id);
+                    Assertion {
+                        id: id.clone(),
+                        text: declared
+                            .map(|assertion| assertion.text.clone())
+                            .unwrap_or_else(|| id.clone()),
+                        check_fn: declared.and_then(|assertion| assertion.check_fn.clone()),
+                        status: assertion_status_from_value(status),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let metric_values = value
+        .get("metric_values")
+        .and_then(serde_json::Value::as_object)
+        .map(|results| {
+            results
+                .iter()
+                .map(|(id, current)| {
+                    let declared = structured.metrics.iter().find(|metric| metric.id == *id);
+                    Metric {
+                        id: id.clone(),
+                        name: declared
+                            .map(|metric| metric.name.clone())
+                            .unwrap_or_else(|| id.clone()),
+                        baseline: declared.and_then(|metric| metric.baseline),
+                        current: current.as_f64(),
+                        target: declared.map(|metric| metric.target).unwrap_or(100.0),
+                        unit: declared.and_then(|metric| metric.unit.clone()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let rubric_scores = value
+        .get("rubric_scores")
+        .and_then(serde_json::Value::as_object)
+        .map(|results| {
+            results
+                .iter()
+                .map(|(id, score)| {
+                    let declared = structured.rubric.iter().find(|rubric| rubric.id == *id);
+                    RubricDimension {
+                        id: id.clone(),
+                        dimension: declared
+                            .map(|rubric| rubric.dimension.clone())
+                            .unwrap_or_else(|| id.clone()),
+                        score: score.as_f64(),
+                        scale: declared.map(|rubric| rubric.scale).unwrap_or(10.0),
+                        description: declared.and_then(|rubric| rubric.description.clone()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(RunOutput {
+        findings: value
+            .get("findings")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        concerns: value
+            .get("concerns")
+            .and_then(serde_json::Value::as_array)
+            .map(|concerns| {
+                concerns
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        confidence: value
+            .get("confidence")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0),
+        needs_human_review: value
+            .get("needs_human_review")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        assertion_results,
+        metric_values,
+        rubric_scores,
+    })
+}
+
+fn assertion_status_from_value(value: &serde_json::Value) -> AssertionStatus {
+    match value.as_str() {
+        Some("pass") => AssertionStatus::Pass,
+        Some("fail") => AssertionStatus::Fail,
+        _ => AssertionStatus::Pending,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -673,6 +793,40 @@ mod tests {
             "50% pass rate with assertions-only should be 50.0, got {progress}"
         );
         assert_eq!(confidence, 0.0, "no rubric means confidence=0");
+    }
+
+    #[test]
+    fn test_parse_run_output_accepts_smoke_result_maps() {
+        let acceptance_json = r#"{"type":"structured","assertions":[
+            {"id":"a1","text":"p","status":"pending"}
+        ],"metrics":[
+            {"id":"m1","name":"coverage","target":100.0,"unit":"%"}
+        ],"rubric":[
+            {"id":"r1","dimension":"quality","scale":10.0}
+        ]}"#;
+        let output_json = r#"{
+            "assertion_results": {"a1": "pass"},
+            "metric_values": {"m1": 80},
+            "rubric_scores": {"r1": 8},
+            "confidence": 0.8,
+            "findings": "smoke test pass",
+            "concerns": [],
+            "needs_human_review": false
+        }"#;
+
+        let output = parse_run_output(acceptance_json, output_json).expect("run output");
+        assert_eq!(output.assertion_results[0].status, AssertionStatus::Pass);
+        assert_eq!(output.metric_values[0].current, Some(80.0));
+        assert_eq!(output.rubric_scores[0].score, Some(8.0));
+
+        let (progress, confidence) =
+            compute_progress_and_confidence(acceptance_json, &Some(output));
+
+        assert!(
+            (progress - 88.0).abs() < 0.01,
+            "smoke maps should compute 88 progress, got {progress}"
+        );
+        assert!((confidence - 0.8).abs() < 0.01);
     }
 
     // No completed run → progress=0, confidence=0
