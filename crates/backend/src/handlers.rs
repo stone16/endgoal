@@ -1,15 +1,16 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, State, WebSocketUpgrade, ws},
     http::StatusCode,
-    routing::{get, post},
+    response::IntoResponse,
+    routing::{any, get, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
 
 use crate::errors::AppError;
-use crate::shared::types::{Acceptance, Node, Phase, Policy};
+use crate::shared::types::{Acceptance, Node, Phase, Policy, WsDaemonMessage};
 
 // ---------------------------------------------------------------------------
 // App state
@@ -63,6 +64,7 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/api/nodes/{id}/effective-policy", get(get_effective_policy))
         .route("/api/nodes/{id}/activate", post(activate_node))
         .route("/api/nodes/{id}/review", post(review_node))
+        .route("/ws/daemon", any(ws_daemon_handler))
         .with_state(state)
 }
 
@@ -472,6 +474,74 @@ async fn review_node(
 
     let node = fetch_node(&state.pool, &id).await?;
     Ok(Json(node))
+}
+
+// ---------------------------------------------------------------------------
+// WS /ws/daemon — daemon WebSocket stub
+// ---------------------------------------------------------------------------
+
+/// Expected daemon token for authentication.
+fn expected_daemon_token() -> String {
+    std::env::var("ENDGOAL_DAEMON_TOKEN").unwrap_or_else(|_| "dev-token".to_string())
+}
+
+async fn ws_daemon_handler(
+    ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    // Authenticate via Bearer token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    if token != expected_daemon_token() {
+        return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
+    }
+
+    ws.on_upgrade(handle_daemon_ws)
+}
+
+async fn handle_daemon_ws(mut socket: ws::WebSocket) {
+    println!("Daemon WS connected");
+
+    while let Some(msg) = socket.recv().await {
+        match msg {
+            Ok(ws::Message::Text(text)) => {
+                match serde_json::from_str::<WsDaemonMessage>(&text) {
+                    Ok(daemon_msg) => {
+                        match &daemon_msg {
+                            WsDaemonMessage::Event(event) => {
+                                println!(
+                                    "[daemon] RunEvent run_id={} seq={} type={} data={:?}",
+                                    event.run_id, event.seq, event.event_type, event.data_text
+                                );
+                            }
+                            WsDaemonMessage::Terminal(terminal) => {
+                                println!(
+                                    "[daemon] RunTerminal run_id={} status={} error={:?}",
+                                    terminal.run_id, terminal.status, terminal.error
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[daemon] Failed to parse message: {e}");
+                    }
+                }
+            }
+            Ok(ws::Message::Close(_)) => {
+                println!("Daemon WS disconnected");
+                break;
+            }
+            Ok(_) => {} // Ignore binary, ping, pong
+            Err(e) => {
+                eprintln!("Daemon WS error: {e}");
+                break;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
