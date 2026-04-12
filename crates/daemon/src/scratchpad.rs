@@ -3,9 +3,13 @@ use std::path::PathBuf;
 /// Return the scratchpad root directory.
 /// Uses `ENDGOAL_SCRATCHPAD_ROOT` env var if set, otherwise defaults to `./scratchpads/`.
 pub fn scratchpad_root() -> PathBuf {
-    std::env::var("ENDGOAL_SCRATCHPAD_ROOT")
+    scratchpad_root_from_env(std::env::var("ENDGOAL_SCRATCHPAD_ROOT").ok())
+}
+
+fn scratchpad_root_from_env(value: Option<String>) -> PathBuf {
+    value
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./scratchpads"))
+        .unwrap_or_else(|| PathBuf::from("./scratchpads"))
 }
 
 /// Create and return the scratchpad directory for a given run ID.
@@ -65,32 +69,14 @@ mod tests {
 
     #[test]
     fn test_scratchpad_root_default() {
-        // Without env var set, should default to ./scratchpads
-        // (We can't easily unset env vars in parallel tests, so just check the function exists)
-        let root = scratchpad_root();
-        // If ENDGOAL_SCRATCHPAD_ROOT is not set, it should be ./scratchpads
-        // If it IS set (from another test), it could be anything
-        assert!(!root.as_os_str().is_empty());
+        let root = scratchpad_root_from_env(None);
+        assert_eq!(root, PathBuf::from("./scratchpads"));
     }
 
     #[test]
     fn test_scratchpad_root_from_env() {
-        // Use a unique env var approach — set and check
-        let original = std::env::var("ENDGOAL_SCRATCHPAD_ROOT").ok();
-        // SAFETY: This test is single-threaded and we restore the original value after.
-        unsafe {
-            std::env::set_var("ENDGOAL_SCRATCHPAD_ROOT", "/tmp/custom-scratchpads");
-        }
-        let root = scratchpad_root();
+        let root = scratchpad_root_from_env(Some("/tmp/custom-scratchpads".to_string()));
         assert_eq!(root, PathBuf::from("/tmp/custom-scratchpads"));
-
-        // Restore
-        unsafe {
-            match original {
-                Some(val) => std::env::set_var("ENDGOAL_SCRATCHPAD_ROOT", val),
-                None => std::env::remove_var("ENDGOAL_SCRATCHPAD_ROOT"),
-            }
-        }
     }
 
     #[test]

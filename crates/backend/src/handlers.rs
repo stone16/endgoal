@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     convert::Infallible,
     sync::{Arc, RwLock},
 };
@@ -91,6 +91,7 @@ pub struct FreezeStartResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct RejectNodeRequest {
+    pub reason: Option<String>,
     pub tighter_policy: Option<serde_json::Value>,
 }
 
@@ -120,10 +121,16 @@ pub fn create_router(pool: SqlitePool) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/nodes", get(list_nodes).post(create_node))
-        .route("/api/nodes/{id}", get(get_node).patch(patch_node).delete(delete_node))
+        .route(
+            "/api/nodes/{id}",
+            get(get_node).patch(patch_node).delete(delete_node),
+        )
         .route("/api/nodes/{id}/children", get(get_children))
         .route("/api/nodes/{id}/ancestors", get(get_ancestors))
-        .route("/api/nodes/{id}/effective-policy", get(get_effective_policy))
+        .route(
+            "/api/nodes/{id}/effective-policy",
+            get(get_effective_policy),
+        )
         .route("/api/nodes/{id}/state", get(get_node_state))
         .route("/api/nodes/{id}/activate", post(activate_node))
         .route("/api/nodes/{id}/review", post(review_node))
@@ -203,15 +210,13 @@ async fn create_node(
 // GET /api/nodes — list top-level nodes (parent_id IS NULL)
 // ---------------------------------------------------------------------------
 
-async fn list_nodes(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<Node>>, AppError> {
+async fn list_nodes(State(state): State<Arc<AppState>>) -> Result<Json<Vec<Node>>, AppError> {
     let rows = sqlx::query_as::<_, NodeRow>(
         "SELECT id, intent, parent_id, phase, acceptance_json, local_policy_json,
                 canonical_artifact_text, canonical_updated_by_run_id,
                 next_step_cache, next_step_cache_for_run_id,
                 created_at, updated_at
-         FROM nodes WHERE parent_id IS NULL ORDER BY created_at"
+         FROM nodes WHERE parent_id IS NULL ORDER BY created_at",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -244,7 +249,7 @@ async fn get_children(
                 canonical_artifact_text, canonical_updated_by_run_id,
                 next_step_cache, next_step_cache_for_run_id,
                 created_at, updated_at
-         FROM nodes WHERE parent_id = ? ORDER BY created_at"
+         FROM nodes WHERE parent_id = ? ORDER BY created_at",
     )
     .bind(&id)
     .fetch_all(&state.pool)
@@ -288,7 +293,7 @@ async fn get_ancestors(
                 next_step_cache, next_step_cache_for_run_id,
                 created_at, updated_at
          FROM ancestors
-         ORDER BY depth DESC"
+         ORDER BY depth DESC",
     )
     .bind(&id)
     .fetch_all(&state.pool)
@@ -430,6 +435,37 @@ fn validate_policy_monotonicity(existing: &Policy, new: &Policy) -> Result<(), A
     Ok(())
 }
 
+fn validate_policy_value_keys(policy: &serde_json::Value) -> Result<(), AppError> {
+    let object = policy
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("tighter_policy must be a JSON object".into()))?;
+
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "tokens_max"
+                | "iterations_max"
+                | "wallclock_max_s"
+                | "allowed_tools"
+                | "review_required"
+        ) {
+            return Err(AppError::BadRequest(format!(
+                "unsupported tighter_policy key: {key}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn policy_has_any_constraint(policy: &Policy) -> bool {
+    policy.tokens_max.is_some()
+        || policy.iterations_max.is_some()
+        || policy.wallclock_max_s.is_some()
+        || policy.allowed_tools.is_some()
+        || policy.review_required.is_some()
+}
+
 // ---------------------------------------------------------------------------
 // DELETE /api/nodes/:id — soft delete (set phase=archived)
 // ---------------------------------------------------------------------------
@@ -439,10 +475,9 @@ async fn delete_node(
     Path(id): Path<String>,
 ) -> Result<Json<Node>, AppError> {
     let existing = fetch_node(&state.pool, &id).await?;
-    let phase: Phase = existing.phase.to_string().parse().unwrap();
 
     // Complete nodes cannot transition
-    if phase == Phase::Complete {
+    if existing.phase == Phase::Complete {
         return Err(AppError::BadRequest(
             "cannot archive a completed node".into(),
         ));
@@ -615,10 +650,10 @@ async fn handle_daemon_ws(socket: ws::WebSocket, state: Arc<AppState>) {
     // Daemon disconnected: abort outbound task and clear hub entry
     outbound.abort();
 
-    // Mark all running runs as failed
+    // Mark all runs that were owned by this daemon connection as failed.
     let now = chrono::Utc::now().to_rfc3339();
     if let Err(e) = sqlx::query(
-        "UPDATE runs SET status = 'failed', ended_at = ? WHERE status = 'running'"
+        "UPDATE runs SET status = 'failed', ended_at = ? WHERE status IN ('dispatched', 'running')",
     )
     .bind(&now)
     .execute(&pool)
@@ -632,7 +667,7 @@ async fn handle_daemon_ws(socket: ws::WebSocket, state: Arc<AppState>) {
         hub_guard.daemon = None;
     }
 
-    println!("[hub] Daemon WS disconnected, running runs marked failed");
+    println!("[hub] Daemon WS disconnected, in-flight runs marked failed");
 }
 
 /// Process a single inbound message from the daemon.
@@ -641,8 +676,8 @@ async fn process_daemon_message(
     hub: &Arc<RwLock<Hub>>,
     text: &str,
 ) -> Result<(), String> {
-    let msg: WsDaemonMessage = serde_json::from_str(text)
-        .map_err(|e| format!("failed to parse daemon message: {e}"))?;
+    let msg: WsDaemonMessage =
+        serde_json::from_str(text).map_err(|e| format!("failed to parse daemon message: {e}"))?;
 
     match msg {
         WsDaemonMessage::Event(event) => {
@@ -651,7 +686,7 @@ async fn process_daemon_message(
 
             // Fetch the run to get node_id
             let run_row = sqlx::query_as::<_, (String, String)>(
-                "SELECT node_id, status FROM runs WHERE id = ?"
+                "SELECT node_id, status FROM runs WHERE id = ?",
             )
             .bind(run_id)
             .fetch_optional(pool)
@@ -668,21 +703,19 @@ async fn process_daemon_message(
 
             // On first RunEvent: flip status to "running" and stamp started_at
             if current_status == "dispatched" {
-                sqlx::query(
-                    "UPDATE runs SET status = 'running', started_at = ? WHERE id = ?"
-                )
-                .bind(&now)
-                .bind(run_id)
-                .execute(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+                sqlx::query("UPDATE runs SET status = 'running', started_at = ? WHERE id = ?")
+                    .bind(&now)
+                    .bind(run_id)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
 
             // Write to run_events table
             let event_id = uuid::Uuid::new_v4().to_string();
             sqlx::query(
                 "INSERT INTO run_events (id, run_id, seq, event_type, data_text, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?)"
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(&event_id)
             .bind(run_id)
@@ -706,13 +739,11 @@ async fn process_daemon_message(
             let now = chrono::Utc::now().to_rfc3339();
 
             // Fetch node_id for this run
-            let run_row = sqlx::query_as::<_, (String,)>(
-                "SELECT node_id FROM runs WHERE id = ?"
-            )
-            .bind(run_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+            let run_row = sqlx::query_as::<_, (String,)>("SELECT node_id FROM runs WHERE id = ?")
+                .bind(run_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| e.to_string())?;
 
             let node_id = match run_row {
                 Some((nid,)) => nid,
@@ -723,24 +754,22 @@ async fn process_daemon_message(
             };
 
             // Update run status in DB
-            sqlx::query(
-                "UPDATE runs SET status = ?, ended_at = ? WHERE id = ?"
-            )
-            .bind(&terminal.status)
-            .bind(&now)
-            .bind(run_id)
-            .execute(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+            sqlx::query("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?")
+                .bind(&terminal.status)
+                .bind(&now)
+                .bind(run_id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
 
             // Broadcast run:updated and node:updated
             {
                 let hub_guard = hub.read().unwrap();
                 hub_guard.broadcast(
-                    &serde_json::json!({ "type": "run:updated", "id": run_id }).to_string()
+                    &serde_json::json!({ "type": "run:updated", "id": run_id }).to_string(),
                 );
                 hub_guard.broadcast(
-                    &serde_json::json!({ "type": "node:updated", "id": node_id }).to_string()
+                    &serde_json::json!({ "type": "node:updated", "id": node_id }).to_string(),
                 );
             }
         }
@@ -881,7 +910,7 @@ async fn dispatch_run(
 
     sqlx::query(
         "INSERT INTO runs (id, node_id, type, status, runtime, input_snapshot_json, created_at)
-         VALUES (?, ?, ?, 'dispatched', ?, ?, ?)"
+         VALUES (?, ?, ?, 'dispatched', ?, ?, ?)",
     )
     .bind(&run_id)
     .bind(&node_id)
@@ -901,7 +930,20 @@ async fn dispatch_run(
     let dispatch_json = serde_json::to_string(&dispatch)
         .map_err(|e| AppError::Internal(format!("failed to serialize RunDispatch: {e}")))?;
 
-    state.hub.read().unwrap().send_to_daemon(&dispatch_json);
+    let dispatched_to_daemon = state.hub.read().unwrap().send_to_daemon(&dispatch_json);
+
+    if !dispatched_to_daemon {
+        let failed_at = chrono::Utc::now().to_rfc3339();
+        sqlx::query("UPDATE runs SET status = 'failed', ended_at = ? WHERE id = ?")
+            .bind(&failed_at)
+            .bind(&run_id)
+            .execute(&state.pool)
+            .await?;
+
+        return Err(AppError::ServiceUnavailable(
+            "daemon disconnected during dispatch".into(),
+        ));
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -923,7 +965,7 @@ async fn list_runs(
     let rows = sqlx::query_as::<_, RunRow>(
         "SELECT id, node_id, type, status, runtime, input_snapshot_json, output_json,
                 scratchpad_path, started_at, ended_at, created_at
-         FROM runs WHERE node_id = ? ORDER BY created_at"
+         FROM runs WHERE node_id = ? ORDER BY created_at",
     )
     .bind(&node_id)
     .fetch_all(&state.pool)
@@ -1056,7 +1098,7 @@ async fn fetch_run_event_rows_after(
         "SELECT run_id, seq, event_type, data_text, created_at
          FROM run_events
          WHERE run_id = ? AND seq > ?
-         ORDER BY seq"
+         ORDER BY seq",
     )
     .bind(run_id)
     .bind(last_seq)
@@ -1267,7 +1309,7 @@ async fn respond_freeze_session(
     let node = fetch_node(&state.pool, &node_id).await?;
     let prompt = build_freeze_prompt(&state.pool, &node, &session, &req.user_response).await?;
     let layer = freeze_layer_label(&session.current_layer).to_string();
-    let item_json = freeze_item_json(&layer, &node)?;
+    let item_json = freeze_item_json(&layer, &node, &session.approved_items_json)?;
     let source_quote = node.intent.clone();
     let cancellation_token = CancellationToken::new();
     let cancel_on_drop = CancelOnDrop(cancellation_token.clone());
@@ -1394,25 +1436,71 @@ async fn reject_node(
         )));
     }
 
+    let mut review_details = serde_json::Map::new();
+    let mut policy_str_to_write = None;
+
+    if let Some(Json(req)) = body {
+        if let Some(reason) = req.reason {
+            let reason = reason.trim().to_string();
+
+            if !reason.is_empty() {
+                review_details.insert("reason".to_string(), serde_json::Value::String(reason));
+            }
+        }
+
+        if let Some(tighter_policy) = req.tighter_policy {
+            validate_policy_value_keys(&tighter_policy)?;
+            let new_policy: Policy = serde_json::from_value(tighter_policy.clone())
+                .map_err(|e| AppError::BadRequest(format!("invalid tighter_policy: {e}")))?;
+
+            if !policy_has_any_constraint(&new_policy) {
+                return Err(AppError::BadRequest(
+                    "tighter_policy must include at least one constraint".into(),
+                ));
+            }
+
+            if let Some(ref existing_policy_str) = existing.local_policy_json {
+                let existing_policy: Policy = serde_json::from_str(existing_policy_str)
+                    .map_err(|e| AppError::Internal(format!("invalid existing policy: {e}")))?;
+                validate_policy_monotonicity(&existing_policy, &new_policy)?;
+            }
+
+            let policy_str = serde_json::to_string(&new_policy)
+                .map_err(|e| AppError::Internal(format!("failed to serialize policy: {e}")))?;
+            policy_str_to_write = Some(policy_str);
+            review_details.insert("tighter_policy".to_string(), tighter_policy);
+        }
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("UPDATE nodes SET phase = 'active', updated_at = ? WHERE id = ?")
+
+    if let Some(policy_str) = policy_str_to_write {
+        sqlx::query(
+            "UPDATE nodes SET phase = 'active', local_policy_json = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&policy_str)
         .bind(&now)
         .bind(&id)
         .execute(&state.pool)
         .await?;
+    } else {
+        sqlx::query("UPDATE nodes SET phase = 'active', updated_at = ? WHERE id = ?")
+            .bind(&now)
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    }
 
-    // Apply tighter_policy if provided
-    if let Some(Json(req)) = body {
-        if let Some(tighter_policy) = req.tighter_policy {
-            let policy_str = serde_json::to_string(&tighter_policy)
-                .map_err(|e| AppError::Internal(format!("failed to serialize policy: {e}")))?;
-            sqlx::query("UPDATE nodes SET local_policy_json = ?, updated_at = ? WHERE id = ?")
-                .bind(&policy_str)
-                .bind(&now)
-                .bind(&id)
-                .execute(&state.pool)
-                .await?;
-        }
+    if !review_details.is_empty() {
+        insert_review_log(
+            &state.pool,
+            &id,
+            "human",
+            "reject",
+            Some(serde_json::Value::Object(review_details)),
+            &now,
+        )
+        .await?;
     }
 
     let node = fetch_node(&state.pool, &id).await?;
@@ -1510,6 +1598,35 @@ fn ensure_freeze_session_active(session: &FreezeSessionRow) -> Result<(), AppErr
     Ok(())
 }
 
+async fn insert_review_log(
+    pool: &SqlitePool,
+    node_id: &str,
+    actor: &str,
+    action: &str,
+    details: Option<serde_json::Value>,
+    now: &str,
+) -> Result<(), AppError> {
+    let details_json = details
+        .map(|value| serde_json::to_string(&value))
+        .transpose()
+        .map_err(|e| AppError::Internal(format!("failed to serialize review details: {e}")))?;
+
+    sqlx::query(
+        "INSERT INTO review_log (id, node_id, actor, action, details_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(node_id)
+    .bind(actor)
+    .bind(action)
+    .bind(details_json)
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 async fn append_approved_item(
     pool: &SqlitePool,
     session_id: &str,
@@ -1588,25 +1705,30 @@ async fn build_freeze_prompt(
     ))
 }
 
-fn freeze_item_json(layer: &str, node: &Node) -> Result<String, AppError> {
+fn freeze_item_json(
+    layer: &str,
+    node: &Node,
+    approved_items_json: &str,
+) -> Result<String, AppError> {
+    let id = next_freeze_item_id(layer, approved_items_json)?;
     let value = match layer {
         "assertion" => serde_json::json!({
-            "id": "a1",
+            "id": id,
             "text": format!("{} is satisfied", node.intent),
             "status": "pending"
         }),
         "metric" => serde_json::json!({
-            "id": "m1",
+            "id": id,
             "name": "completion",
             "target": 1.0
         }),
         "rubric" => serde_json::json!({
-            "id": "r1",
+            "id": id,
             "dimension": "quality",
             "scale": 10.0
         }),
         _ => serde_json::json!({
-            "id": "a1",
+            "id": id,
             "text": format!("{} is satisfied", node.intent),
             "status": "pending"
         }),
@@ -1614,6 +1736,43 @@ fn freeze_item_json(layer: &str, node: &Node) -> Result<String, AppError> {
 
     serde_json::to_string(&value)
         .map_err(|e| AppError::Internal(format!("failed to serialize freeze item: {e}")))
+}
+
+fn next_freeze_item_id(layer: &str, approved_items_json: &str) -> Result<String, AppError> {
+    let prefix = match layer {
+        "metric" | "metrics" => "m",
+        "rubric" => "r",
+        _ => "a",
+    };
+    let matching_layers: &[&str] = match layer {
+        "metric" | "metrics" => &["metric", "metrics"],
+        "rubric" => &["rubric"],
+        _ => &["assertion", "assertions"],
+    };
+    let mut existing_ids = HashSet::new();
+
+    for item in parse_approved_items(approved_items_json)? {
+        if !matching_layers.contains(&item.layer.as_str()) {
+            continue;
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&item.item_json)
+            .map_err(|e| AppError::BadRequest(format!("invalid approved item_json: {e}")))?;
+
+        if let Some(id) = value.get("id").and_then(serde_json::Value::as_str) {
+            existing_ids.insert(id.to_string());
+        }
+    }
+
+    for index in 1.. {
+        let candidate = format!("{prefix}{index}");
+
+        if !existing_ids.contains(&candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    unreachable!("unbounded integer range should always yield a freeze item id")
 }
 
 fn structured_acceptance_from_approved_items(
@@ -1679,7 +1838,7 @@ async fn fetch_node(pool: &SqlitePool, id: &str) -> Result<Node, AppError> {
                 canonical_artifact_text, canonical_updated_by_run_id,
                 next_step_cache, next_step_cache_for_run_id,
                 created_at, updated_at
-         FROM nodes WHERE id = ?"
+         FROM nodes WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -1729,7 +1888,7 @@ async fn fetch_run(pool: &SqlitePool, id: &str) -> Result<Run, AppError> {
     let row = sqlx::query_as::<_, RunRow>(
         "SELECT id, node_id, type, status, runtime, input_snapshot_json, output_json,
                 scratchpad_path, started_at, ended_at, created_at
-         FROM runs WHERE id = ?"
+         FROM runs WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -1766,7 +1925,7 @@ async fn fetch_ancestor_nodes(pool: &SqlitePool, node_id: &str) -> Result<Vec<No
                 next_step_cache, next_step_cache_for_run_id,
                 created_at, updated_at
          FROM ancestors
-         ORDER BY depth DESC"
+         ORDER BY depth DESC",
     )
     .bind(node_id)
     .fetch_all(pool)
@@ -1788,7 +1947,7 @@ async fn compute_effective_policy(pool: &SqlitePool, node_id: &str) -> Result<Po
          )
          SELECT local_policy_json FROM chain
          WHERE local_policy_json IS NOT NULL
-         ORDER BY depth ASC"
+         ORDER BY depth ASC",
     )
     .bind(node_id)
     .fetch_all(pool)

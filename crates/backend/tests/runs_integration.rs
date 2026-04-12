@@ -3,7 +3,7 @@
 //! All test names are prefixed with `runs_` so `cargo test -- runs` matches them.
 
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::net::SocketAddr;
 use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 
@@ -15,7 +15,9 @@ async fn start_server() -> (SocketAddr, tempfile::TempDir) {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
 
     let pool = endgoal_backend::create_pool(&db_url).await.expect("pool");
-    endgoal_backend::run_migrations(&pool).await.expect("migrations");
+    endgoal_backend::run_migrations(&pool)
+        .await
+        .expect("migrations");
 
     let app = endgoal_backend::create_router(pool);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -40,8 +42,13 @@ async fn start_server() -> (SocketAddr, tempfile::TempDir) {
     let mut daemon_ws = None;
     for _ in 0..10 {
         match connect_async(req.clone()).await {
-            Ok((ws, _)) => { daemon_ws = Some(ws); break; }
-            Err(_) => { tokio::time::sleep(tokio::time::Duration::from_millis(20)).await; }
+            Ok((ws, _)) => {
+                daemon_ws = Some(ws);
+                break;
+            }
+            Err(_) => {
+                tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+            }
         }
     }
     let mut daemon_ws = daemon_ws.expect("mock daemon should connect");
@@ -278,8 +285,12 @@ async fn runs_get_single_has_input_snapshot() {
     assert_eq!(get_resp.status(), 200);
     let run: Value = get_resp.json().await.unwrap();
 
-    assert!(run["input_snapshot_json"].is_string(), "input_snapshot_json should be non-null string");
-    let snapshot: Value = serde_json::from_str(run["input_snapshot_json"].as_str().unwrap()).unwrap();
+    assert!(
+        run["input_snapshot_json"].is_string(),
+        "input_snapshot_json should be non-null string"
+    );
+    let snapshot: Value =
+        serde_json::from_str(run["input_snapshot_json"].as_str().unwrap()).unwrap();
     assert!(snapshot["intent"].is_string());
     assert!(snapshot["acceptance"].is_object());
     assert!(snapshot["effective_policy"].is_object());
@@ -394,6 +405,39 @@ async fn runs_reject_with_tighter_policy() {
     let node: Value = node_resp.json().await.unwrap();
     let policy: Value = serde_json::from_str(node["local_policy_json"].as_str().unwrap()).unwrap();
     assert_eq!(policy["tokens_max"], 50000);
+}
+
+#[tokio::test]
+async fn runs_reject_rejects_loosening_policy() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+    let node_id = create_active_structured_node(&client, addr).await;
+
+    client
+        .post(format!("{}/api/nodes/{}/review", base_url(addr), &node_id))
+        .send()
+        .await
+        .unwrap();
+
+    let reject_resp = client
+        .post(format!("{}/api/nodes/{}/reject", base_url(addr), &node_id))
+        .json(&json!({
+            "tighter_policy": {"tokens_max": 200000}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reject_resp.status(), 400);
+
+    let node_resp = client
+        .get(format!("{}/api/nodes/{}", base_url(addr), &node_id))
+        .send()
+        .await
+        .unwrap();
+    let node: Value = node_resp.json().await.unwrap();
+    assert_eq!(node["phase"], "in_review");
+    let policy: Value = serde_json::from_str(node["local_policy_json"].as_str().unwrap()).unwrap();
+    assert_eq!(policy["tokens_max"], 100000);
 }
 
 #[tokio::test]
@@ -575,7 +619,11 @@ async fn runs_e2e_create_freeze_dispatch_verify_snapshot() {
 
     // 3. Activate the child node (structured acceptance allows activation)
     let activate_resp = client
-        .post(format!("{}/api/nodes/{}/activate", base_url(addr), child_id))
+        .post(format!(
+            "{}/api/nodes/{}/activate",
+            base_url(addr),
+            child_id
+        ))
         .send()
         .await
         .unwrap();
@@ -610,7 +658,9 @@ async fn runs_e2e_create_freeze_dispatch_verify_snapshot() {
     assert_eq!(run["runtime"], "echo");
 
     // 6. Verify input_snapshot_json contains frozen data
-    let snapshot_str = run["input_snapshot_json"].as_str().expect("snapshot should be non-null");
+    let snapshot_str = run["input_snapshot_json"]
+        .as_str()
+        .expect("snapshot should be non-null");
     let snapshot: Value = serde_json::from_str(snapshot_str).unwrap();
 
     // Intent matches the child node
@@ -624,9 +674,18 @@ async fn runs_e2e_create_freeze_dispatch_verify_snapshot() {
 
     // Effective policy should be merged (child tightens parent)
     let eff_policy = &snapshot["effective_policy"];
-    assert_eq!(eff_policy["tokens_max"], 50000, "child tightens tokens_max to 50000");
-    assert_eq!(eff_policy["iterations_max"], 20, "inherits iterations_max from parent");
-    assert_eq!(eff_policy["review_required"], true, "inherits review_required from parent");
+    assert_eq!(
+        eff_policy["tokens_max"], 50000,
+        "child tightens tokens_max to 50000"
+    );
+    assert_eq!(
+        eff_policy["iterations_max"], 20,
+        "inherits iterations_max from parent"
+    );
+    assert_eq!(
+        eff_policy["review_required"], true,
+        "inherits review_required from parent"
+    );
 
     // Parent context should contain root as ancestor
     let parent_ctx = snapshot["parent_context"].as_array().unwrap();
@@ -662,7 +721,8 @@ async fn runs_e2e_create_freeze_dispatch_verify_snapshot() {
         .await
         .unwrap();
     let run_final: Value = run_after.json().await.unwrap();
-    let output_stored: Value = serde_json::from_str(run_final["output_json"].as_str().unwrap()).unwrap();
+    let output_stored: Value =
+        serde_json::from_str(run_final["output_json"].as_str().unwrap()).unwrap();
     assert_eq!(output_stored["confidence"], 0.85);
 
     // 9. Verify list runs returns the run

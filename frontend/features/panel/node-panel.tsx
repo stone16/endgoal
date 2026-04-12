@@ -62,7 +62,7 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
       // Plain-text reasons are sent as policy context for the backend audit path.
     }
 
-    return { tighter_policy: { reason: trimmed } };
+    return { reason: trimmed };
   }, [reviewReason]);
 
   const approveReview = useCallback(async () => {

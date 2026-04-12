@@ -228,6 +228,44 @@ async fn freeze_approve_persists_item_before_next_proposal() {
 }
 
 #[tokio::test]
+async fn freeze_approve_next_proposal_uses_unique_id() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+    let node_id = create_prose_node(&client, addr).await;
+    let session_id = start_freeze_session(&client, addr, &node_id).await;
+
+    let item_json = json!({
+        "id": "a1",
+        "text": "first assertion",
+        "status": "pending"
+    })
+    .to_string();
+
+    let resp = client
+        .post(format!(
+            "{}/api/nodes/{}/freeze/respond",
+            base_url(addr),
+            node_id
+        ))
+        .json(&json!({
+            "session_id": session_id,
+            "user_response": "approve first assertion",
+            "action": "approve",
+            "approved_item_json": item_json
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let stream_text = resp.text().await.unwrap();
+    assert!(
+        stream_text.contains(r#""item_json":"{\"id\":\"a2\""#),
+        "{stream_text}"
+    );
+}
+
+#[tokio::test]
 async fn freeze_skip_layer_advances_to_metrics() {
     let (addr, _tmp) = start_server().await;
     let client = Client::new();

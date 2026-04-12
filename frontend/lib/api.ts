@@ -177,6 +177,7 @@ export function approveNode(id: string): Promise<Node> {
 }
 
 export type RejectNodeRequest = {
+  reason?: string;
   tighter_policy?: Record<string, unknown>;
 };
 

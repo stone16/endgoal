@@ -109,7 +109,8 @@ pub async fn state_at(
         .and_then(|json_str| parse_run_output(&node.acceptance_json, &json_str));
 
     // 4. Compute progress and confidence
-    let (progress, confidence) = compute_progress_and_confidence(&node.acceptance_json, &run_output);
+    let (progress, confidence) =
+        compute_progress_and_confidence(&node.acceptance_json, &run_output);
 
     // 5. Compute/cache next_step
     let next_step = compute_next_step(pool, node_id, &node, llm).await?;
@@ -335,7 +336,11 @@ fn compute_progress_and_confidence(
             .iter()
             .map(|m| {
                 let current = m.current.unwrap_or(0.0);
-                if m.target > 0.0 { (current / m.target).min(1.0) } else { 0.0 }
+                if m.target > 0.0 {
+                    (current / m.target).min(1.0)
+                } else {
+                    0.0
+                }
             })
             .sum();
         sum / metric_values.len() as f64
@@ -381,11 +386,7 @@ fn compute_progress_and_confidence(
             .iter()
             .map(|r| {
                 let score = r.score.unwrap_or(0.0);
-                if r.scale > 0.0 {
-                    score / r.scale
-                } else {
-                    0.0
-                }
+                if r.scale > 0.0 { score / r.scale } else { 0.0 }
             })
             .sum();
         sum / rubric_scores.len() as f64
@@ -414,9 +415,7 @@ async fn compute_next_step(
         &node.next_step_cache_for_run_id,
         &node.canonical_updated_by_run_id,
     ) {
-        (Some(_cached), Some(cache_run_id), Some(canon_run_id)) => {
-            cache_run_id == canon_run_id
-        }
+        (Some(_cached), Some(cache_run_id), Some(canon_run_id)) => cache_run_id == canon_run_id,
         (Some(cached), None, None) => {
             // Cache exists and canonical hasn't been set by any run yet — stale, regenerate
             // But if canonical_artifact_text is null, return early message instead
@@ -515,10 +514,9 @@ async fn compute_effective_policy(pool: &SqlitePool, node_id: &str) -> Result<Po
                 }
                 if let Some(ref tools) = policy.allowed_tools {
                     merged.allowed_tools = Some(match merged.allowed_tools {
-                        Some(existing) => existing
-                            .into_iter()
-                            .filter(|t| tools.contains(t))
-                            .collect(),
+                        Some(existing) => {
+                            existing.into_iter().filter(|t| tools.contains(t)).collect()
+                        }
                         None => tools.clone(),
                     });
                 }
@@ -546,14 +544,14 @@ pub async fn assemble_parent_context(
     node_id: &str,
 ) -> Result<Vec<AncestorSummary>, AppError> {
     let rows: Vec<AncestorRow> = sqlx::query_as::<_, AncestorRow>(
-        "WITH RECURSIVE ancestors(id, intent, phase, acceptance_json, canonical_artifact_text, depth) AS (
+        "WITH RECURSIVE ancestors(id, intent, phase, acceptance_json, canonical_artifact_text, parent_id, depth) AS (
             -- Start from the node's parent (exclude self)
-            SELECT n.id, n.intent, n.phase, n.acceptance_json, n.canonical_artifact_text, 1
+            SELECT n.id, n.intent, n.phase, n.acceptance_json, n.canonical_artifact_text, n.parent_id, 1
             FROM nodes n
             INNER JOIN nodes child ON child.parent_id = n.id
             WHERE child.id = ?
             UNION ALL
-            SELECT p.id, p.intent, p.phase, p.acceptance_json, p.canonical_artifact_text, a.depth + 1
+            SELECT p.id, p.intent, p.phase, p.acceptance_json, p.canonical_artifact_text, p.parent_id, a.depth + 1
             FROM nodes p
             INNER JOIN ancestors a ON a.parent_id = p.id
          )
@@ -617,12 +615,11 @@ fn collect_blockers<'a>(
         }
 
         // Fetch direct children
-        let children: Vec<ChildRow> = sqlx::query_as::<_, ChildRow>(
-            "SELECT id, phase FROM nodes WHERE parent_id = ?",
-        )
-        .bind(node_id)
-        .fetch_all(pool)
-        .await?;
+        let children: Vec<ChildRow> =
+            sqlx::query_as::<_, ChildRow>("SELECT id, phase FROM nodes WHERE parent_id = ?")
+                .bind(node_id)
+                .fetch_all(pool)
+                .await?;
 
         for child in children {
             let phase = child.phase.parse::<Phase>().unwrap_or(Phase::Draft);
@@ -827,6 +824,52 @@ mod tests {
             "smoke maps should compute 88 progress, got {progress}"
         );
         assert!((confidence - 0.8).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_assemble_parent_context_depth3() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("test.db");
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = crate::create_pool(&db_url).await.expect("pool");
+        crate::run_migrations(&pool).await.expect("migrations");
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO nodes (id, intent, phase, acceptance_json, created_at, updated_at)
+             VALUES ('root', 'Root', 'active', '{\"type\":\"structured\",\"assertions\":[],\"metrics\":[],\"rubric\":[]}', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("insert root");
+        sqlx::query(
+            "INSERT INTO nodes (id, intent, parent_id, phase, acceptance_json, created_at, updated_at)
+             VALUES ('mid', 'Mid', 'root', 'active', '{\"type\":\"structured\",\"assertions\":[],\"metrics\":[],\"rubric\":[]}', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("insert mid");
+        sqlx::query(
+            "INSERT INTO nodes (id, intent, parent_id, phase, acceptance_json, created_at, updated_at)
+             VALUES ('leaf', 'Leaf', 'mid', 'active', '{\"type\":\"structured\",\"assertions\":[],\"metrics\":[],\"rubric\":[]}', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("insert leaf");
+
+        let context = assemble_parent_context(&pool, "leaf")
+            .await
+            .expect("parent context");
+
+        assert_eq!(context.len(), 2);
+        assert_eq!(context[0].id, "root");
+        assert_eq!(context[1].id, "mid");
     }
 
     // No completed run → progress=0, confidence=0

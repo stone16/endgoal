@@ -103,7 +103,8 @@ export function useNodePanelData(nodeId: string | null): NodePanelData {
 
     if (
       (message.type === "node:updated" && message.id === nodeId) ||
-      message.type === "run:updated"
+      (message.type === "run:updated" &&
+        runs.some((run) => run.id === message.id))
     ) {
       void refresh();
     }

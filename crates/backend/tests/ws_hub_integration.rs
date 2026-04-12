@@ -5,12 +5,14 @@
 //!
 //! All test names prefixed with `ws_` so `cargo test -- ws` matches them.
 
+use futures::{SinkExt, StreamExt};
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::net::SocketAddr;
 use tokio::time::{Duration, timeout};
-use tokio_tungstenite::{connect_async, tungstenite::Message, tungstenite::client::IntoClientRequest};
-use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::{
+    connect_async, tungstenite::Message, tungstenite::client::IntoClientRequest,
+};
 
 // ---------------------------------------------------------------------------
 // Test server helper
@@ -23,7 +25,9 @@ async fn start_server() -> (SocketAddr, tempfile::TempDir) {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
 
     let pool = endgoal_backend::create_pool(&db_url).await.expect("pool");
-    endgoal_backend::run_migrations(&pool).await.expect("migrations");
+    endgoal_backend::run_migrations(&pool)
+        .await
+        .expect("migrations");
 
     let app = endgoal_backend::create_router(pool);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -137,7 +141,10 @@ async fn ws_full_roundtrip_frontend_receives_run_updated() {
         other => panic!("expected Text, got: {:?}", other),
     };
     let dispatch_json: Value = serde_json::from_str(&dispatch_text).unwrap();
-    assert_eq!(dispatch_json["run_id"], run_id, "dispatch should contain run_id");
+    assert_eq!(
+        dispatch_json["run_id"], run_id,
+        "dispatch should contain run_id"
+    );
 
     // 5. Daemon sends RunEvent back
     let run_event = json!({
@@ -173,8 +180,14 @@ async fn ws_full_roundtrip_frontend_receives_run_updated() {
         }
     };
 
-    assert_eq!(msg_json["type"], "run:updated", "frontend should receive run:updated");
-    assert_eq!(msg_json["id"], run_id, "frontend should receive correct run_id");
+    assert_eq!(
+        msg_json["type"], "run:updated",
+        "frontend should receive run:updated"
+    );
+    assert_eq!(
+        msg_json["id"], run_id,
+        "frontend should receive correct run_id"
+    );
 
     // 7. DB: run_events row exists
     // (We verify this via the fact that Run status is "running")
@@ -185,8 +198,14 @@ async fn ws_full_roundtrip_frontend_receives_run_updated() {
         .unwrap();
     assert_eq!(run_resp.status(), 200);
     let run: Value = run_resp.json().await.unwrap();
-    assert_eq!(run["status"], "running", "Run status should be 'running' after first RunEvent");
-    assert!(run["started_at"].is_string(), "started_at should be set after RunEvent");
+    assert_eq!(
+        run["status"], "running",
+        "Run status should be 'running' after first RunEvent"
+    );
+    assert!(
+        run["started_at"].is_string(),
+        "started_at should be set after RunEvent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -227,15 +246,25 @@ async fn ws_daemon_disconnect_marks_running_runs_failed() {
         "event_type": "stdout",
         "data_text": "running..."
     });
-    daemon_ws.send(Message::Text(run_event.to_string().into())).await.unwrap();
+    daemon_ws
+        .send(Message::Text(run_event.to_string().into()))
+        .await
+        .unwrap();
 
     // Small delay to let event be processed
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify run is running
-    let run_resp = client.get(format!("{}/api/runs/{}", base_url(addr), &run_id)).send().await.unwrap();
+    let run_resp = client
+        .get(format!("{}/api/runs/{}", base_url(addr), &run_id))
+        .send()
+        .await
+        .unwrap();
     let run: Value = run_resp.json().await.unwrap();
-    assert_eq!(run["status"], "running", "Run should be running before disconnect");
+    assert_eq!(
+        run["status"], "running",
+        "Run should be running before disconnect"
+    );
 
     // Disconnect daemon
     daemon_ws.close(None).await.unwrap();
@@ -244,13 +273,74 @@ async fn ws_daemon_disconnect_marks_running_runs_failed() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     loop {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let run_resp = client.get(format!("{}/api/runs/{}", base_url(addr), &run_id)).send().await.unwrap();
+        let run_resp = client
+            .get(format!("{}/api/runs/{}", base_url(addr), &run_id))
+            .send()
+            .await
+            .unwrap();
         let run: Value = run_resp.json().await.unwrap();
         if run["status"] == "failed" {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!("Run status did not become 'failed' within 1s after daemon disconnect; got: {}", run["status"]);
+            panic!(
+                "Run status did not become 'failed' within 1s after daemon disconnect; got: {}",
+                run["status"]
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn ws_daemon_disconnect_marks_dispatched_runs_failed() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let mut daemon_ws = connect_daemon(addr).await;
+    let node_id = create_active_node(&client, addr).await;
+    let dispatch_resp = client
+        .post(format!("{}/api/nodes/{}/runs", base_url(addr), &node_id))
+        .json(&json!({"type": "research_iteration", "runtime": "echo"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dispatch_resp.status(), 201);
+    let dispatched: Value = dispatch_resp.json().await.unwrap();
+    let run_id = dispatched["id"].as_str().unwrap().to_string();
+
+    let _dispatch_msg = timeout(Duration::from_secs(2), daemon_ws.next())
+        .await
+        .expect("daemon receives dispatch")
+        .unwrap()
+        .unwrap();
+
+    let run_resp = client
+        .get(format!("{}/api/runs/{}", base_url(addr), &run_id))
+        .send()
+        .await
+        .unwrap();
+    let run: Value = run_resp.json().await.unwrap();
+    assert_eq!(run["status"], "dispatched");
+
+    daemon_ws.close(None).await.unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let run_resp = client
+            .get(format!("{}/api/runs/{}", base_url(addr), &run_id))
+            .send()
+            .await
+            .unwrap();
+        let run: Value = run_resp.json().await.unwrap();
+        if run["status"] == "failed" {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "Run status did not become 'failed' within 1s after daemon disconnect; got: {}",
+                run["status"]
+            );
         }
     }
 }
@@ -273,7 +363,11 @@ async fn ws_dispatch_returns_503_when_no_daemon() {
         .await
         .unwrap();
 
-    assert_eq!(dispatch_resp.status(), 503, "should return 503 when no daemon connected");
+    assert_eq!(
+        dispatch_resp.status(),
+        503,
+        "should return 503 when no daemon connected"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +406,9 @@ async fn ws_frontend_endpoint_accessible() {
 
     // Connect frontend WS - should succeed
     let url = ws_url(addr, "/ws/frontend");
-    let (mut ws, _) = connect_async(&url).await.expect("frontend ws should connect");
+    let (mut ws, _) = connect_async(&url)
+        .await
+        .expect("frontend ws should connect");
     ws.close(None).await.unwrap();
 }
 
@@ -342,7 +438,11 @@ async fn ws_run_terminal_updates_status_and_notifies_frontend() {
     let run_id = dispatched["id"].as_str().unwrap().to_string();
 
     // Consume the RunDispatch
-    let _dispatch_msg = timeout(Duration::from_secs(2), daemon_ws.next()).await.unwrap().unwrap().unwrap();
+    let _dispatch_msg = timeout(Duration::from_secs(2), daemon_ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 
     // First send RunEvent to transition to "running"
     let run_event = json!({
@@ -352,10 +452,17 @@ async fn ws_run_terminal_updates_status_and_notifies_frontend() {
         "event_type": "stdout",
         "data_text": "output"
     });
-    daemon_ws.send(Message::Text(run_event.to_string().into())).await.unwrap();
+    daemon_ws
+        .send(Message::Text(run_event.to_string().into()))
+        .await
+        .unwrap();
 
     // Consume the run:updated from RunEvent
-    let _evt_msg = timeout(Duration::from_secs(2), frontend_stream.next()).await.unwrap().unwrap().unwrap();
+    let _evt_msg = timeout(Duration::from_secs(2), frontend_stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 
     // Now send RunTerminal with status "complete"
     let terminal = json!({
@@ -364,7 +471,10 @@ async fn ws_run_terminal_updates_status_and_notifies_frontend() {
         "status": "complete",
         "error": null
     });
-    daemon_ws.send(Message::Text(terminal.to_string().into())).await.unwrap();
+    daemon_ws
+        .send(Message::Text(terminal.to_string().into()))
+        .await
+        .unwrap();
 
     // Frontend should receive run:updated or node:updated
     let terminal_msg = timeout(Duration::from_secs(2), frontend_stream.next())
@@ -386,9 +496,16 @@ async fn ws_run_terminal_updates_status_and_notifies_frontend() {
 
     // DB: Run status should be "complete"
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let run_resp = client.get(format!("{}/api/runs/{}", base_url(addr), &run_id)).send().await.unwrap();
+    let run_resp = client
+        .get(format!("{}/api/runs/{}", base_url(addr), &run_id))
+        .send()
+        .await
+        .unwrap();
     let run: Value = run_resp.json().await.unwrap();
-    assert_eq!(run["status"], "complete", "Run should be complete after RunTerminal");
+    assert_eq!(
+        run["status"], "complete",
+        "Run should be complete after RunTerminal"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +551,12 @@ async fn ws_node_mutation_broadcasts_node_updated() {
         other => panic!("expected Text, got: {:?}", other),
     };
     let msg_json: Value = serde_json::from_str(&msg_text).unwrap();
-    assert_eq!(msg_json["type"], "node:updated", "frontend should receive node:updated");
-    assert_eq!(msg_json["id"], node_id, "broadcast should include correct node_id");
+    assert_eq!(
+        msg_json["type"], "node:updated",
+        "frontend should receive node:updated"
+    );
+    assert_eq!(
+        msg_json["id"], node_id,
+        "broadcast should include correct node_id"
+    );
 }
