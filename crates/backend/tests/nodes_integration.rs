@@ -34,6 +34,22 @@ fn base_url(addr: SocketAddr) -> String {
     format!("http://{}", addr)
 }
 
+#[tokio::test]
+async fn nodes_health_returns_ok() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{}/api/health", base_url(addr)))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+}
+
 // ---------------------------------------------------------------------------
 // AC1: POST /api/nodes creates Node, returns JSON with all fields
 // ---------------------------------------------------------------------------
