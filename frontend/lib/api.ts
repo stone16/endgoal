@@ -163,6 +163,10 @@ export function getRun(id: string): Promise<Run> {
   return requestJson<Run>(`/api/runs/${encodeURIComponent(id)}`);
 }
 
+export function getRunEventStreamUrl(id: string): string {
+  return buildUrl(`/api/runs/${encodeURIComponent(id)}/stream`);
+}
+
 export type NodeAncestorsResponse = AncestorSummary[];
 
 export type FreezeActiveSession = {

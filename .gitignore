@@ -31,7 +31,7 @@ crates/shared/bindings/
 Thumbs.db
 
 # Runtime / local state
-runs/
+/runs/
 *.log
 *.pid
 .harness/*/

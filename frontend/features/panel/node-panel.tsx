@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { PhaseBadge } from "@/features/nodes/components/phase-badge";
 import { ProgressBar } from "@/features/nodes/components/progress-bar";
@@ -11,14 +11,21 @@ import { PanelToast } from "@/features/panel/components/panel-toast";
 import { RunsList } from "@/features/panel/components/runs-list";
 import { useNodePanelData } from "@/features/panel/hooks/use-node-panel-data";
 import { useRunTrigger } from "@/features/panel/hooks/use-run-trigger";
+import { RunDetailOverlay } from "@/features/runs/run-detail-overlay";
 
 type NodePanelProps = {
   nodeId: string | null;
   onClose: () => void;
 };
 
+type SelectedRun = {
+  nodeId: string;
+  runId: string;
+};
+
 export function NodePanel({ nodeId, onClose }: NodePanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
+  const [selectedRun, setSelectedRun] = useState<SelectedRun | null>(null);
   const { node, state, acceptance, runs, isLoading, error, refresh } =
     useNodePanelData(nodeId);
   const runTrigger = useRunTrigger({
@@ -27,6 +34,9 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
     refresh,
   });
 
+  const selectedRunId =
+    selectedRun && selectedRun.nodeId === nodeId ? selectedRun.runId : null;
+
   useEffect(() => {
     if (!nodeId) {
       return;
@@ -34,6 +44,10 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (selectedRunId) {
+          return;
+        }
+
         onClose();
       }
     }
@@ -67,7 +81,10 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [nodeId, onClose]);
+  }, [nodeId, onClose, selectedRunId]);
+
+  const selectedRunModel =
+    selectedRunId ? runs.find((run) => run.id === selectedRunId) ?? null : null;
 
   if (!nodeId) {
     return null;
@@ -137,7 +154,12 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
               </section>
 
               <AcceptanceSection acceptance={acceptance} />
-              <RunsList runs={runs} />
+              <RunsList
+                runs={runs}
+                onSelectRun={(runId) => {
+                  setSelectedRun({ nodeId: node.id, runId });
+                }}
+              />
               <PanelActions
                 isTriggerRunBusy={runTrigger.isDispatching}
                 onTriggerRun={() => {
@@ -163,6 +185,11 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
       <PanelToast
         onDismiss={runTrigger.dismissToast}
         toast={runTrigger.toast}
+      />
+      <RunDetailOverlay
+        initialRun={selectedRunModel}
+        runId={selectedRunId}
+        onClose={() => setSelectedRun(null)}
       />
     </>
   );

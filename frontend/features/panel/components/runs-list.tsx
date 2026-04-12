@@ -3,6 +3,7 @@ import { getRunFindingsSnippet } from "@/features/panel/lib/node-panel-data";
 
 type RunsListProps = {
   runs: Run[];
+  onSelectRun: (runId: string) => void;
 };
 
 function formatTimestamp(isoTimestamp: string): string {
@@ -31,7 +32,7 @@ function runStatusClass(status: string): string {
   }
 }
 
-export function RunsList({ runs }: RunsListProps) {
+export function RunsList({ runs, onSelectRun }: RunsListProps) {
   return (
     <section className="rounded-lg border border-stone-200 p-4">
       <div className="flex items-center justify-between gap-4">
@@ -50,7 +51,9 @@ export function RunsList({ runs }: RunsListProps) {
           <button
             key={run.id}
             type="button"
+            onClick={() => onSelectRun(run.id)}
             className="w-full rounded-md border border-stone-200 bg-stone-50 p-3 text-left transition-colors hover:border-stone-300 hover:bg-white"
+            aria-label={`Open run ${run.type} details`}
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm font-semibold text-stone-900">
