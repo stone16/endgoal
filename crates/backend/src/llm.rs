@@ -47,14 +47,24 @@ impl LlmClient for StubLlmClient {
 
     fn stream(
         &self,
-        _prompt: &str,
+        prompt: &str,
         cancellation_token: CancellationToken,
     ) -> Pin<Box<dyn Stream<Item = Result<String, AppError>> + Send>> {
         if cancellation_token.is_cancelled() {
             return Box::pin(futures::stream::empty());
         }
 
-        let items = vec![Ok("mock proposal".to_string())];
+        let user_response = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("User response: "))
+            .unwrap_or("")
+            .trim();
+        let proposal = if user_response.is_empty() {
+            "mock proposal".to_string()
+        } else {
+            format!("mock proposal reflecting: {user_response}")
+        };
+        let items = vec![Ok(proposal)];
         Box::pin(futures::stream::iter(items))
     }
 }
@@ -90,5 +100,16 @@ mod tests {
         assert_eq!(first, "mock proposal");
         // Stream should have only one item
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stub_stream_reflects_user_response() {
+        let client = StubLlmClient;
+        let mut stream = client.stream(
+            "Node intent: ship\nUser response: make it more specific",
+            CancellationToken::new(),
+        );
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first, "mock proposal reflecting: make it more specific");
     }
 }

@@ -3,6 +3,7 @@
 import type { Acceptance } from "@/bindings/Acceptance";
 import type { Node } from "@/bindings/Node";
 import { dispatchRun } from "@/lib/api";
+import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
 import {
@@ -23,11 +24,9 @@ type UseRunTriggerInput = {
 
 type UseRunTriggerState = {
   cancelGate: () => void;
-  closeFreezePlaceholder: () => void;
   dismissToast: () => void;
   freezeNow: () => void;
   isDispatching: boolean;
-  isFreezePlaceholderOpen: boolean;
   isGateOpen: boolean;
   proceedAsExploration: () => Promise<void>;
   toast: ToastState;
@@ -47,8 +46,8 @@ export function useRunTrigger({
   node,
   refresh,
 }: UseRunTriggerInput): UseRunTriggerState {
+  const router = useRouter();
   const [isGateOpen, setIsGateOpen] = useState(false);
-  const [isFreezePlaceholderOpen, setIsFreezePlaceholderOpen] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
 
@@ -116,13 +115,13 @@ export function useRunTrigger({
   }, [runDispatch]);
 
   const freezeNow = useCallback(() => {
-    setIsGateOpen(false);
-    setIsFreezePlaceholderOpen(true);
-  }, []);
+    if (!node) {
+      return;
+    }
 
-  const closeFreezePlaceholder = useCallback(() => {
-    setIsFreezePlaceholderOpen(false);
-  }, []);
+    setIsGateOpen(false);
+    router.push(`/nodes/${encodeURIComponent(node.id)}/freeze`);
+  }, [node, router]);
 
   const dismissToast = useCallback(() => {
     setToast(null);
@@ -130,11 +129,9 @@ export function useRunTrigger({
 
   return {
     cancelGate,
-    closeFreezePlaceholder,
     dismissToast,
     freezeNow,
     isDispatching,
-    isFreezePlaceholderOpen,
     isGateOpen,
     proceedAsExploration,
     toast,

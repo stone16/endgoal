@@ -57,9 +57,17 @@ function BreadcrumbTrail({
   );
 }
 
-export function ObjectiveTree({ rootId }: { rootId: string }) {
+export function ObjectiveTree({
+  initialSelectedNodeId = null,
+  rootId,
+}: {
+  initialSelectedNodeId?: string | null;
+  rootId: string;
+}) {
   const { ancestors, root, isLoading, error, refresh } = useObjectiveTree(rootId);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(
+    initialSelectedNodeId,
+  );
   const closePanel = useCallback(() => setSelectedNodeId(null), []);
   const selectedNode = useMemo(
     () => (selectedNodeId ? selectedNodeId : null),

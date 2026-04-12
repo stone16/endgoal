@@ -6,7 +6,6 @@ import { PhaseBadge } from "@/features/nodes/components/phase-badge";
 import { ProgressBar } from "@/features/nodes/components/progress-bar";
 import { AcceptanceSection } from "@/features/panel/components/acceptance-section";
 import { ArchetypeBGateModal } from "@/features/panel/components/archetype-b-gate-modal";
-import { FreezeSessionPlaceholder } from "@/features/panel/components/freeze-session-placeholder";
 import { PanelActions } from "@/features/panel/components/panel-actions";
 import { PanelToast } from "@/features/panel/components/panel-toast";
 import { RunsList } from "@/features/panel/components/runs-list";
@@ -160,11 +159,6 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
         onProceedAsExploration={() => {
           void runTrigger.proceedAsExploration();
         }}
-      />
-      <FreezeSessionPlaceholder
-        isOpen={runTrigger.isFreezePlaceholderOpen}
-        nodeIntent={node?.intent ?? ""}
-        onClose={runTrigger.closeFreezePlaceholder}
       />
       <PanelToast
         onDismiss={runTrigger.dismissToast}

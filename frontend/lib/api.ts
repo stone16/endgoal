@@ -1,4 +1,5 @@
 import type { AncestorSummary } from "@/bindings/AncestorSummary";
+import type { FreezeProposal } from "@/bindings/FreezeProposal";
 import type { Node } from "@/bindings/Node";
 import type { NodeState } from "@/bindings/NodeState";
 import type { Run } from "@/bindings/Run";
@@ -51,6 +52,40 @@ async function requestJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+async function requestText(
+  path: string,
+  init: RequestInit = {},
+): Promise<string> {
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "text/event-stream");
+
+  const response = await fetch(buildUrl(path), {
+    ...init,
+    cache: "no-store",
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await response.text());
+  }
+
+  return response.text();
+}
+
+function parseSseJson<T>(text: string): T {
+  const dataLines = text
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart());
+  const payload = dataLines.join("\n").trim();
+
+  if (!payload) {
+    throw new Error("Freeze session stream returned no data");
+  }
+
+  return JSON.parse(payload) as T;
 }
 
 export function getApiBaseUrl(): string {
@@ -129,3 +164,88 @@ export function getRun(id: string): Promise<Run> {
 }
 
 export type NodeAncestorsResponse = AncestorSummary[];
+
+export type FreezeActiveSession = {
+  session_id: string;
+  approved_items_json: string;
+  current_layer: string;
+};
+
+export type FreezeStartResponse = {
+  session_id: string;
+};
+
+export type FreezeRespondAction =
+  | "start"
+  | "approve"
+  | "edit"
+  | "reject"
+  | "skip_layer";
+
+export type FreezeRespondRequest = {
+  session_id: string;
+  user_response: string;
+  action: FreezeRespondAction;
+  approved_item_json?: string;
+};
+
+export type FreezeLayerCompleteEvent = {
+  event_type: "layer_complete";
+  layer: string;
+  next_layer: string | null;
+};
+
+export type FreezeStreamEvent = FreezeProposal | FreezeLayerCompleteEvent;
+
+export function getActiveFreezeSession(
+  nodeId: string,
+): Promise<FreezeActiveSession | null> {
+  return requestJson<FreezeActiveSession | null>(
+    `/api/nodes/${encodeURIComponent(nodeId)}/freeze/active`,
+  );
+}
+
+export function startFreezeSession(
+  nodeId: string,
+): Promise<FreezeStartResponse> {
+  return requestJson<FreezeStartResponse>(
+    `/api/nodes/${encodeURIComponent(nodeId)}/freeze/start`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function respondFreezeSession(
+  nodeId: string,
+  request: FreezeRespondRequest,
+): Promise<FreezeStreamEvent> {
+  const text = await requestText(
+    `/api/nodes/${encodeURIComponent(nodeId)}/freeze/respond`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+
+  return parseSseJson<FreezeStreamEvent>(text);
+}
+
+export function commitFreezeSession(
+  nodeId: string,
+  sessionId: string,
+): Promise<Node> {
+  return requestJson<Node>(
+    `/api/nodes/${encodeURIComponent(nodeId)}/freeze/commit`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ session_id: sessionId }),
+    },
+  );
+}
