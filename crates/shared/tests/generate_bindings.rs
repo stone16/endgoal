@@ -30,4 +30,6 @@ fn export_all_bindings() {
     WsDaemonMessage::export_all().expect("Failed to export WsDaemonMessage");
     FreezeSession::export_all().expect("Failed to export FreezeSession");
     FreezeProposal::export_all().expect("Failed to export FreezeProposal");
+    FreezeLayerCompleteEvent::export_all()
+        .expect("Failed to export FreezeLayerCompleteEvent");
 }

@@ -433,6 +433,20 @@ fn freeze_proposal_round_trip() {
     assert_eq!(back, fp);
 }
 
+#[test]
+fn freeze_layer_complete_event_round_trip() {
+    let event = FreezeLayerCompleteEvent {
+        event_type: "layer_complete".into(),
+        layer: "assertions".into(),
+        next_layer: Some("metrics".into()),
+    };
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains(r#""event_type":"layer_complete""#));
+    let back: FreezeLayerCompleteEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, event);
+}
+
 // ---------------------------------------------------------------------------
 // AssertionStatus round-trip
 // ---------------------------------------------------------------------------

@@ -1,8 +1,11 @@
 import type { AncestorSummary } from "@/bindings/AncestorSummary";
+import type { FreezeLayerCompleteEvent } from "@/bindings/FreezeLayerCompleteEvent";
 import type { FreezeProposal } from "@/bindings/FreezeProposal";
 import type { Node } from "@/bindings/Node";
 import type { NodeState } from "@/bindings/NodeState";
 import type { Run } from "@/bindings/Run";
+
+export type { FreezeLayerCompleteEvent } from "@/bindings/FreezeLayerCompleteEvent";
 
 const DEFAULT_API_URL = "http://localhost:3001";
 
@@ -218,12 +221,6 @@ export type FreezeRespondRequest = {
   user_response: string;
   action: FreezeRespondAction;
   approved_item_json?: string;
-};
-
-export type FreezeLayerCompleteEvent = {
-  event_type: "layer_complete";
-  layer: string;
-  next_layer: string | null;
 };
 
 export type FreezeStreamEvent = FreezeProposal | FreezeLayerCompleteEvent;

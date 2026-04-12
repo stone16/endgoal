@@ -22,8 +22,9 @@ use crate::errors::AppError;
 use crate::hub::Hub;
 use crate::llm::{LlmClient, create_llm_client};
 use crate::shared::types::{
-    Acceptance, AncestorSummary, Assertion, FreezeProposal, Metric, Node, NodeState, Phase, Policy,
-    RubricDimension, Run, RunDispatch, RunInput, StructuredAcceptance, WsDaemonMessage,
+    Acceptance, AncestorSummary, Assertion, FreezeLayerCompleteEvent, FreezeProposal, Metric, Node,
+    NodeState, Phase, Policy, RubricDimension, Run, RunDispatch, RunInput, StructuredAcceptance,
+    WsDaemonMessage,
 };
 
 // ---------------------------------------------------------------------------
@@ -1238,12 +1239,18 @@ async fn respond_freeze_session(
             .execute(&state.pool)
             .await?;
 
-            let body = serde_json::json!({
-                "event_type": "layer_complete",
-                "layer": freeze_layer_label(&session.current_layer),
-                "next_layer": next_layer,
-            })
-            .to_string();
+            let event = FreezeLayerCompleteEvent {
+                event_type: "layer_complete".to_string(),
+                layer: freeze_layer_label(&session.current_layer).to_string(),
+                next_layer: next_layer.map(str::to_string),
+            };
+            let body = serde_json::to_string(&event).unwrap_or_else(|err| {
+                serde_json::json!({
+                    "event_type": "error",
+                    "message": format!("failed to serialize layer complete event: {err}"),
+                })
+                .to_string()
+            });
             let stream = futures::stream::once(async move {
                 Ok(Event::default().event("layer_complete").data(body))
             })

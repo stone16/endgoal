@@ -290,3 +290,11 @@ pub struct FreezeProposal {
     pub reasoning: String,
     pub source_quote: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FreezeLayerCompleteEvent {
+    pub event_type: String,
+    pub layer: String,
+    pub next_layer: Option<String>,
+}
