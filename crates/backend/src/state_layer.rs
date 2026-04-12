@@ -274,7 +274,7 @@ fn assertion_status_from_value(value: &serde_json::Value) -> AssertionStatus {
 ///   rubric_normalized    * 0.20
 /// ) * 100
 /// ```
-/// with optional-layer weight redistribution when layers are empty.
+/// Missing layers contribute zero instead of redistributing their weights.
 fn compute_progress_and_confidence(
     acceptance_json: &str,
     run_output: &Option<RunOutput>,
@@ -365,20 +365,9 @@ fn compute_progress_and_confidence(
         0.0
     };
 
-    // Weight redistribution for optional layers
-    let progress = match (has_assertions, has_metrics, has_rubric) {
-        (false, false, false) => 0.0,
-        (true, false, false) => assertions_pass_rate * 100.0,
-        (false, true, false) => metric_achievement * 100.0,
-        (false, false, true) => rubric_normalized * 100.0,
-        (true, true, false) => (assertions_pass_rate * 0.5 + metric_achievement * 0.5) * 100.0,
-        (true, false, true) => (assertions_pass_rate * 0.667 + rubric_normalized * 0.333) * 100.0,
-        (false, true, true) => (metric_achievement * 0.667 + rubric_normalized * 0.333) * 100.0,
-        (true, true, true) => {
-            (assertions_pass_rate * 0.40 + metric_achievement * 0.40 + rubric_normalized * 0.20)
-                * 100.0
-        }
-    };
+    let progress =
+        (assertions_pass_rate * 0.40 + metric_achievement * 0.40 + rubric_normalized * 0.20)
+            * 100.0;
 
     // Confidence = avg(score / scale) across rubric dimensions
     let confidence = if !rubric_scores.is_empty() {
@@ -563,28 +552,49 @@ pub async fn assemble_parent_context(
     .fetch_all(pool)
     .await?;
 
-    let summaries = rows
-        .into_iter()
-        .map(|r| {
-            let phase = r.phase.parse::<Phase>().unwrap_or(Phase::Draft);
-            // Truncate acceptance_summary to first 300 chars
-            let acceptance_summary = r.acceptance_json.chars().take(300).collect::<String>();
-            // Truncate canonical_summary to first 500 chars
-            let canonical_summary = r
-                .canonical_artifact_text
-                .map(|t| t.chars().take(500).collect::<String>());
-            AncestorSummary {
-                id: r.id,
-                intent: r.intent,
-                phase,
-                acceptance_summary,
-                canonical_summary,
-                progress: 0, // MVP: avoid infinite recursion
-            }
-        })
-        .collect();
+    let mut summaries = Vec::with_capacity(rows.len());
+    for r in rows {
+        let progress = progress_for_node(pool, &r.id, &r.acceptance_json).await?;
+        let phase = r.phase.parse::<Phase>().unwrap_or(Phase::Draft);
+        let acceptance_summary = r.acceptance_json.chars().take(300).collect::<String>();
+        let canonical_summary = r
+            .canonical_artifact_text
+            .map(|t| t.chars().take(500).collect::<String>());
+
+        summaries.push(AncestorSummary {
+            id: r.id,
+            intent: r.intent,
+            phase,
+            acceptance_summary,
+            canonical_summary,
+            progress,
+        });
+    }
 
     Ok(summaries)
+}
+
+async fn progress_for_node(
+    pool: &SqlitePool,
+    node_id: &str,
+    acceptance_json: &str,
+) -> Result<u8, AppError> {
+    let run_output_row = sqlx::query_as::<_, RunOutputRow>(
+        "SELECT output_json FROM runs
+         WHERE node_id = ? AND status = 'completed'
+         ORDER BY ended_at DESC
+         LIMIT 1",
+    )
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let run_output = run_output_row
+        .and_then(|r| r.output_json)
+        .and_then(|json_str| parse_run_output(acceptance_json, &json_str));
+    let (progress, _) = compute_progress_and_confidence(acceptance_json, &run_output);
+
+    Ok(progress.round().clamp(0.0, 100.0) as u8)
 }
 
 // ---------------------------------------------------------------------------
@@ -768,7 +778,7 @@ mod tests {
         );
     }
 
-    // Assertions only → weight 1.0
+    // Assertions only still uses the locked assertion weight.
     #[test]
     fn test_progress_assertions_only() {
         let acceptance_json = r#"{"type":"structured","assertions":[
@@ -786,8 +796,8 @@ mod tests {
             compute_progress_and_confidence(acceptance_json, &Some(output));
 
         assert!(
-            (progress - 50.0).abs() < 0.01,
-            "50% pass rate with assertions-only should be 50.0, got {progress}"
+            (progress - 20.0).abs() < 0.01,
+            "50% pass rate at 40% assertion weight should be 20.0, got {progress}"
         );
         assert_eq!(confidence, 0.0, "no rubric means confidence=0");
     }
@@ -920,7 +930,7 @@ mod tests {
             metrics_only,
             &Some(make_output(vec![], vec![(60.0, 100.0)], vec![])),
         );
-        assert!((progress - 60.0).abs() < 0.01);
+        assert!((progress - 24.0).abs() < 0.01);
         assert_eq!(confidence, 0.0);
 
         let rubric_only = r#"{"type":"structured","assertions":[],"metrics":[],"rubric":[
@@ -930,7 +940,7 @@ mod tests {
             rubric_only,
             &Some(make_output(vec![], vec![], vec![(8.0, 10.0)])),
         );
-        assert!((progress - 80.0).abs() < 0.01);
+        assert!((progress - 16.0).abs() < 0.01);
         assert!((confidence - 0.8).abs() < 0.01);
 
         let assertions_rubric = r#"{"type":"structured","assertions":[
@@ -946,7 +956,7 @@ mod tests {
                 vec![(6.0, 10.0)],
             )),
         );
-        assert!((progress - 86.68).abs() < 0.05);
+        assert!((progress - 52.0).abs() < 0.05);
 
         let metrics_rubric = r#"{"type":"structured","assertions":[],"metrics":[
             {"id":"m1","name":"coverage","target":100.0}
@@ -957,7 +967,7 @@ mod tests {
             metrics_rubric,
             &Some(make_output(vec![], vec![(50.0, 100.0)], vec![(9.0, 10.0)])),
         );
-        assert!((progress - 63.32).abs() < 0.05);
+        assert!((progress - 38.0).abs() < 0.05);
 
         let no_declared_structured = r#"{"type":"prose","text":"fallback"}"#;
         let (progress, confidence) = compute_progress_and_confidence(
@@ -1004,7 +1014,7 @@ mod tests {
                 vec![],
             )),
         );
-        assert!((progress - 75.0).abs() < 0.01);
+        assert!((progress - 60.0).abs() < 0.01);
     }
 
     #[tokio::test]
@@ -1156,12 +1166,45 @@ mod tests {
         .await
         .expect("insert leaf");
 
+        let output_json = serde_json::json!({
+            "findings": "root completed",
+            "concerns": [],
+            "confidence": 1.0,
+            "needs_human_review": false,
+            "assertion_results": [{"id":"a1","text":"done","check_fn":null,"status":"pass"}],
+            "metric_values": [],
+            "rubric_scores": []
+        })
+        .to_string();
+        sqlx::query(
+            "UPDATE nodes
+             SET acceptance_json = '{\"type\":\"structured\",\"assertions\":[{\"id\":\"a1\",\"text\":\"done\",\"status\":\"pending\"}],\"metrics\":[],\"rubric\":[]}'
+             WHERE id = 'root'",
+        )
+        .execute(&pool)
+        .await
+        .expect("update root acceptance");
+        sqlx::query(
+            "INSERT INTO runs (id, node_id, type, status, runtime, output_json, created_at, ended_at)
+             VALUES ('root-run', 'root', 'research_iteration', 'completed', 'echo', ?, ?, ?)",
+        )
+        .bind(&output_json)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("insert root run output");
+
         let context = assemble_parent_context(&pool, "leaf")
             .await
             .expect("parent context");
 
         assert_eq!(context.len(), 2);
         assert_eq!(context[0].id, "root");
+        assert!(
+            context[0].progress > 0,
+            "ancestor progress should reflect completed ancestor runs"
+        );
         assert_eq!(context[1].id, "mid");
     }
 

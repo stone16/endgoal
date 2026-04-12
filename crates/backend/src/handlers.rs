@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State, WebSocketUpgrade, ws},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header},
     response::{
         IntoResponse,
         sse::{Event, Sse},
@@ -22,8 +22,8 @@ use crate::errors::AppError;
 use crate::hub::Hub;
 use crate::llm::{LlmClient, create_llm_client};
 use crate::shared::types::{
-    Acceptance, AncestorSummary, Assertion, FreezeLayerCompleteEvent, FreezeProposal, Metric, Node,
-    NodeState, Phase, Policy, RubricDimension, Run, RunDispatch, RunInput, StructuredAcceptance,
+    Acceptance, Assertion, FreezeLayerCompleteEvent, FreezeProposal, Metric, Node, NodeState,
+    Phase, Policy, RubricDimension, Run, RunDispatch, RunInput, StructuredAcceptance,
     WsDaemonMessage,
 };
 
@@ -186,6 +186,26 @@ async fn create_node(
     let acceptance = req
         .acceptance_json
         .unwrap_or_else(|| r#"{"type":"prose","text":""}"#.to_string());
+    let _: Acceptance = serde_json::from_str(&acceptance)
+        .map_err(|e| AppError::BadRequest(format!("invalid acceptance_json: {e}")))?;
+
+    let local_policy_json = if let Some(policy_json) = req.local_policy_json {
+        let policy: Policy = serde_json::from_str(&policy_json)
+            .map_err(|e| AppError::BadRequest(format!("invalid local_policy_json: {e}")))?;
+
+        if let Some(ref parent_id) = req.parent_id {
+            let _parent = fetch_node(&state.pool, parent_id).await?;
+            let parent_effective = compute_effective_policy(&state.pool, parent_id).await?;
+            validate_policy_does_not_exceed_base(&parent_effective, &policy)?;
+        }
+
+        Some(
+            serde_json::to_string(&policy)
+                .map_err(|e| AppError::Internal(format!("failed to serialize policy: {e}")))?,
+        )
+    } else {
+        None
+    };
 
     sqlx::query(
         "INSERT INTO nodes (id, intent, parent_id, phase, acceptance_json, local_policy_json, created_at, updated_at)
@@ -195,7 +215,7 @@ async fn create_node(
     .bind(&req.intent)
     .bind(&req.parent_id)
     .bind(&acceptance)
-    .bind(&req.local_policy_json)
+    .bind(&local_policy_json)
     .bind(&now)
     .bind(&now)
     .execute(&state.pool)
@@ -354,19 +374,20 @@ async fn patch_node(
         ));
     }
 
-    let existing = fetch_node(&state.pool, &id).await?;
+    let _existing = fetch_node(&state.pool, &id).await?;
 
     // Validate local_policy monotonicity if being updated
-    if let Some(ref new_policy_str) = req.local_policy {
-        if let Some(ref existing_policy_str) = existing.local_policy_json {
-            let existing_policy: Policy = serde_json::from_str(existing_policy_str)
-                .map_err(|e| AppError::Internal(format!("invalid existing policy: {e}")))?;
-            let new_policy: Policy = serde_json::from_str(new_policy_str)
-                .map_err(|e| AppError::BadRequest(format!("invalid policy JSON: {e}")))?;
-
-            validate_policy_monotonicity(&existing_policy, &new_policy)?;
-        }
-    }
+    let local_policy_to_write = if let Some(ref new_policy_str) = req.local_policy {
+        let new_policy: Policy = serde_json::from_str(new_policy_str)
+            .map_err(|e| AppError::BadRequest(format!("invalid policy JSON: {e}")))?;
+        validate_policy_update_monotonicity(&state.pool, &id, &new_policy).await?;
+        Some(
+            serde_json::to_string(&new_policy)
+                .map_err(|e| AppError::Internal(format!("failed to serialize policy: {e}")))?,
+        )
+    } else {
+        None
+    };
 
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -379,7 +400,7 @@ async fn patch_node(
             .await?;
     }
 
-    if let Some(ref local_policy) = req.local_policy {
+    if let Some(ref local_policy) = local_policy_to_write {
         sqlx::query("UPDATE nodes SET local_policy_json = ?, updated_at = ? WHERE id = ?")
             .bind(local_policy)
             .bind(&now)
@@ -395,42 +416,125 @@ async fn patch_node(
 
 /// Validate that a new policy only tightens (never loosens) compared to existing.
 fn validate_policy_monotonicity(existing: &Policy, new: &Policy) -> Result<(), AppError> {
-    // tokens_max: new must be <= existing (tighter)
-    if let (Some(existing_val), Some(new_val)) = (existing.tokens_max, new.tokens_max) {
-        if new_val > existing_val {
-            return Err(AppError::BadRequest(format!(
-                "tokens_max can only be tightened: {} -> {} is loosening",
-                existing_val, new_val
-            )));
-        }
-    }
+    validate_numeric_policy_tightening("tokens_max", existing.tokens_max, new.tokens_max)?;
+    validate_numeric_policy_tightening(
+        "iterations_max",
+        existing.iterations_max,
+        new.iterations_max,
+    )?;
+    validate_numeric_policy_tightening(
+        "wallclock_max_s",
+        existing.wallclock_max_s,
+        new.wallclock_max_s,
+    )?;
+    validate_allowed_tools_tightening(&existing.allowed_tools, &new.allowed_tools, false)?;
 
-    // iterations_max: new must be <= existing
-    if let (Some(existing_val), Some(new_val)) = (existing.iterations_max, new.iterations_max) {
-        if new_val > existing_val {
-            return Err(AppError::BadRequest(format!(
-                "iterations_max can only be tightened: {} -> {} is loosening",
-                existing_val, new_val
-            )));
-        }
-    }
-
-    // wallclock_max_s: new must be <= existing
-    if let (Some(existing_val), Some(new_val)) = (existing.wallclock_max_s, new.wallclock_max_s) {
-        if new_val > existing_val {
-            return Err(AppError::BadRequest(format!(
-                "wallclock_max_s can only be tightened: {} -> {} is loosening",
-                existing_val, new_val
-            )));
-        }
-    }
-
-    // review_required: cannot go from true to false
-    if let (Some(true), Some(false)) = (existing.review_required, new.review_required) {
+    if existing.review_required == Some(true) && new.review_required != Some(true) {
         return Err(AppError::BadRequest(
-            "review_required cannot be loosened from true to false".into(),
+            "review_required cannot be loosened from true".into(),
         ));
     }
+
+    Ok(())
+}
+
+fn validate_numeric_policy_tightening(
+    name: &str,
+    existing: Option<u64>,
+    new: Option<u64>,
+) -> Result<(), AppError> {
+    match (existing, new) {
+        (Some(existing_val), Some(new_val)) if new_val > existing_val => Err(AppError::BadRequest(
+            format!("{name} can only be tightened: {existing_val} -> {new_val} is loosening",),
+        )),
+        (Some(_), None) => Err(AppError::BadRequest(format!(
+            "{name} cannot be removed from an effective policy",
+        ))),
+        _ => Ok(()),
+    }
+}
+
+fn validate_allowed_tools_tightening(
+    existing: &Option<Vec<String>>,
+    new: &Option<Vec<String>>,
+    allow_omission: bool,
+) -> Result<(), AppError> {
+    match (existing, new) {
+        (Some(existing_tools), Some(new_tools)) => {
+            let existing_set: HashSet<&str> = existing_tools.iter().map(String::as_str).collect();
+            let added: Vec<&str> = new_tools
+                .iter()
+                .map(String::as_str)
+                .filter(|tool| !existing_set.contains(tool))
+                .collect();
+
+            if !added.is_empty() {
+                return Err(AppError::BadRequest(format!(
+                    "allowed_tools can only be narrowed; added tools: {}",
+                    added.join(", ")
+                )));
+            }
+
+            Ok(())
+        }
+        (Some(_), None) if !allow_omission => Err(AppError::BadRequest(
+            "allowed_tools cannot be removed from an effective policy".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn validate_policy_does_not_exceed_base(base: &Policy, new_local: &Policy) -> Result<(), AppError> {
+    validate_explicit_numeric_policy_tightening(
+        "tokens_max",
+        base.tokens_max,
+        new_local.tokens_max,
+    )?;
+    validate_explicit_numeric_policy_tightening(
+        "iterations_max",
+        base.iterations_max,
+        new_local.iterations_max,
+    )?;
+    validate_explicit_numeric_policy_tightening(
+        "wallclock_max_s",
+        base.wallclock_max_s,
+        new_local.wallclock_max_s,
+    )?;
+    validate_allowed_tools_tightening(&base.allowed_tools, &new_local.allowed_tools, true)?;
+
+    if base.review_required == Some(true) && new_local.review_required == Some(false) {
+        return Err(AppError::BadRequest(
+            "review_required cannot contradict an effective review requirement".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_explicit_numeric_policy_tightening(
+    name: &str,
+    base: Option<u64>,
+    new_local: Option<u64>,
+) -> Result<(), AppError> {
+    match (base, new_local) {
+        (Some(existing_val), Some(new_val)) if new_val > existing_val => Err(AppError::BadRequest(
+            format!("{name} cannot loosen effective policy: {existing_val} -> {new_val}",),
+        )),
+        _ => Ok(()),
+    }
+}
+
+async fn validate_policy_update_monotonicity(
+    pool: &SqlitePool,
+    node_id: &str,
+    new_local: &Policy,
+) -> Result<(), AppError> {
+    let current_effective = compute_effective_policy(pool, node_id).await?;
+    let ancestor_effective = compute_ancestor_effective_policy(pool, node_id).await?;
+    validate_policy_does_not_exceed_base(&ancestor_effective, new_local)?;
+
+    let candidate_effective = policy_with_added_constraints(ancestor_effective, new_local);
+    validate_policy_monotonicity(&current_effective, &candidate_effective)?;
 
     Ok(())
 }
@@ -464,6 +568,57 @@ fn policy_has_any_constraint(policy: &Policy) -> bool {
         || policy.wallclock_max_s.is_some()
         || policy.allowed_tools.is_some()
         || policy.review_required.is_some()
+}
+
+fn empty_policy() -> Policy {
+    Policy {
+        tokens_max: None,
+        iterations_max: None,
+        wallclock_max_s: None,
+        allowed_tools: None,
+        review_required: None,
+    }
+}
+
+fn policy_with_added_constraints(mut base: Policy, policy: &Policy) -> Policy {
+    merge_policy_constraints(&mut base, policy);
+    base
+}
+
+fn merge_policy_constraints(merged: &mut Policy, policy: &Policy) {
+    if let Some(val) = policy.tokens_max {
+        merged.tokens_max = Some(match merged.tokens_max {
+            Some(existing) => existing.min(val),
+            None => val,
+        });
+    }
+    if let Some(val) = policy.iterations_max {
+        merged.iterations_max = Some(match merged.iterations_max {
+            Some(existing) => existing.min(val),
+            None => val,
+        });
+    }
+    if let Some(val) = policy.wallclock_max_s {
+        merged.wallclock_max_s = Some(match merged.wallclock_max_s {
+            Some(existing) => existing.min(val),
+            None => val,
+        });
+    }
+    if let Some(ref tools) = policy.allowed_tools {
+        merged.allowed_tools = Some(match merged.allowed_tools.take() {
+            Some(existing) => existing
+                .into_iter()
+                .filter(|tool| tools.contains(tool))
+                .collect(),
+            None => tools.clone(),
+        });
+    }
+    if let Some(val) = policy.review_required {
+        merged.review_required = Some(match merged.review_required {
+            Some(existing) => existing || val,
+            None => val,
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -571,20 +726,35 @@ fn expected_daemon_token() -> String {
     std::env::var("ENDGOAL_DAEMON_TOKEN").unwrap_or_else(|_| "dev-token".to_string())
 }
 
+fn daemon_token_from_headers(headers: &HeaderMap) -> &str {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("")
+}
+
+fn authorize_daemon_headers(headers: &HeaderMap) -> Result<(), AppError> {
+    if daemon_token_from_headers(headers) != expected_daemon_token() {
+        return Err(AppError::Unauthorized("invalid token".into()));
+    }
+
+    Ok(())
+}
+
+fn broadcast_run_and_node_updated(hub: &Arc<RwLock<Hub>>, run_id: &str, node_id: &str) {
+    let hub_guard = hub.read().unwrap();
+    hub_guard.broadcast(&serde_json::json!({ "type": "run:updated", "id": run_id }).to_string());
+    hub_guard.broadcast(&serde_json::json!({ "type": "node:updated", "id": node_id }).to_string());
+}
+
 async fn ws_daemon_handler(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
 ) -> axum::response::Response {
-    // Authenticate via Bearer token
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-
-    if token != expected_daemon_token() {
-        return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
+    if let Err(err) = authorize_daemon_headers(&headers) {
+        return err.into_response();
     }
 
     ws.on_upgrade(move |socket| handle_daemon_ws(socket, state))
@@ -652,6 +822,19 @@ async fn handle_daemon_ws(socket: ws::WebSocket, state: Arc<AppState>) {
 
     // Mark all runs that were owned by this daemon connection as failed.
     let now = chrono::Utc::now().to_rfc3339();
+    let failed_runs = match sqlx::query_as::<_, (String, String)>(
+        "SELECT id, node_id FROM runs WHERE status IN ('dispatched', 'running')",
+    )
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("[hub] Failed to fetch in-flight runs before disconnect: {e}");
+            vec![]
+        }
+    };
+
     if let Err(e) = sqlx::query(
         "UPDATE runs SET status = 'failed', ended_at = ? WHERE status IN ('dispatched', 'running')",
     )
@@ -660,6 +843,10 @@ async fn handle_daemon_ws(socket: ws::WebSocket, state: Arc<AppState>) {
     .await
     {
         eprintln!("[hub] Failed to mark running runs as failed: {e}");
+    }
+
+    for (run_id, node_id) in failed_runs {
+        broadcast_run_and_node_updated(&hub, &run_id, &node_id);
     }
 
     {
@@ -877,21 +1064,7 @@ async fn dispatch_run(
 
     let effective_policy = compute_effective_policy(&state.pool, &node_id).await?;
 
-    let ancestors = fetch_ancestor_nodes(&state.pool, &node_id).await?;
-    let parent_context: Vec<AncestorSummary> = ancestors
-        .into_iter()
-        .map(|a| {
-            let acc_summary = a.acceptance_json.clone();
-            AncestorSummary {
-                id: a.id,
-                intent: a.intent,
-                phase: a.phase,
-                acceptance_summary: acc_summary,
-                canonical_summary: a.canonical_artifact_text,
-                progress: 0,
-            }
-        })
-        .collect();
+    let parent_context = crate::state_layer::assemble_parent_context(&state.pool, &node_id).await?;
 
     let run_input = RunInput {
         intent: node.intent.clone(),
@@ -1153,10 +1326,13 @@ fn run_event_stream_error_event(message: String) -> Event {
 async fn patch_run_output(
     State(state): State<Arc<AppState>>,
     Path(run_id): Path<String>,
+    headers: HeaderMap,
     Json(output): Json<serde_json::Value>,
 ) -> Result<Json<Run>, AppError> {
+    authorize_daemon_headers(&headers)?;
+
     // Verify run exists
-    let _ = fetch_run(&state.pool, &run_id).await?;
+    let existing = fetch_run(&state.pool, &run_id).await?;
 
     let output_str = serde_json::to_string(&output)
         .map_err(|e| AppError::Internal(format!("failed to serialize output: {e}")))?;
@@ -1168,6 +1344,7 @@ async fn patch_run_output(
         .await?;
 
     let run = fetch_run(&state.pool, &run_id).await?;
+    broadcast_run_and_node_updated(&state.hub, &run_id, &existing.node_id);
     Ok(Json(run))
 }
 
@@ -1459,13 +1636,21 @@ async fn reject_node(
                 ));
             }
 
-            if let Some(ref existing_policy_str) = existing.local_policy_json {
+            let current_effective = compute_effective_policy(&state.pool, &id).await?;
+            validate_policy_does_not_exceed_base(&current_effective, &new_policy)?;
+
+            let policy_to_write = if let Some(ref existing_policy_str) = existing.local_policy_json
+            {
                 let existing_policy: Policy = serde_json::from_str(existing_policy_str)
                     .map_err(|e| AppError::Internal(format!("invalid existing policy: {e}")))?;
-                validate_policy_monotonicity(&existing_policy, &new_policy)?;
-            }
+                policy_with_added_constraints(existing_policy, &new_policy)
+            } else {
+                new_policy
+            };
 
-            let policy_str = serde_json::to_string(&new_policy)
+            validate_policy_update_monotonicity(&state.pool, &id, &policy_to_write).await?;
+
+            let policy_str = serde_json::to_string(&policy_to_write)
                 .map_err(|e| AppError::Internal(format!("failed to serialize policy: {e}")))?;
             policy_str_to_write = Some(policy_str);
             review_details.insert("tighter_policy".to_string(), tighter_policy);
@@ -1953,49 +2138,47 @@ async fn compute_effective_policy(pool: &SqlitePool, node_id: &str) -> Result<Po
     .fetch_all(pool)
     .await?;
 
-    let mut merged = Policy {
-        tokens_max: None,
-        iterations_max: None,
-        wallclock_max_s: None,
-        allowed_tools: None,
-        review_required: None,
-    };
+    let mut merged = empty_policy();
 
     for row in &rows {
         if let Some(ref json_str) = row.local_policy_json {
             if let Ok(policy) = serde_json::from_str::<Policy>(json_str) {
-                if let Some(val) = policy.tokens_max {
-                    merged.tokens_max = Some(match merged.tokens_max {
-                        Some(existing) => existing.min(val),
-                        None => val,
-                    });
-                }
-                if let Some(val) = policy.iterations_max {
-                    merged.iterations_max = Some(match merged.iterations_max {
-                        Some(existing) => existing.min(val),
-                        None => val,
-                    });
-                }
-                if let Some(val) = policy.wallclock_max_s {
-                    merged.wallclock_max_s = Some(match merged.wallclock_max_s {
-                        Some(existing) => existing.min(val),
-                        None => val,
-                    });
-                }
-                if let Some(ref tools) = policy.allowed_tools {
-                    merged.allowed_tools = Some(match merged.allowed_tools {
-                        Some(existing) => {
-                            existing.into_iter().filter(|t| tools.contains(t)).collect()
-                        }
-                        None => tools.clone(),
-                    });
-                }
-                if let Some(val) = policy.review_required {
-                    merged.review_required = Some(match merged.review_required {
-                        Some(existing) => existing || val,
-                        None => val,
-                    });
-                }
+                merge_policy_constraints(&mut merged, &policy);
+            }
+        }
+    }
+
+    Ok(merged)
+}
+
+async fn compute_ancestor_effective_policy(
+    pool: &SqlitePool,
+    node_id: &str,
+) -> Result<Policy, AppError> {
+    let rows: Vec<PolicyRow> = sqlx::query_as::<_, PolicyRow>(
+        "WITH RECURSIVE chain(id, parent_id, local_policy_json, depth) AS (
+            SELECT parent.id, parent.parent_id, parent.local_policy_json, 1
+            FROM nodes child
+            INNER JOIN nodes parent ON child.parent_id = parent.id
+            WHERE child.id = ?
+            UNION ALL
+            SELECT n.id, n.parent_id, n.local_policy_json, c.depth + 1
+            FROM nodes n
+            INNER JOIN chain c ON c.parent_id = n.id
+         )
+         SELECT local_policy_json FROM chain
+         WHERE local_policy_json IS NOT NULL
+         ORDER BY depth ASC",
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut merged = empty_policy();
+    for row in &rows {
+        if let Some(ref json_str) = row.local_policy_json {
+            if let Ok(policy) = serde_json::from_str::<Policy>(json_str) {
+                merge_policy_constraints(&mut merged, &policy);
             }
         }
     }

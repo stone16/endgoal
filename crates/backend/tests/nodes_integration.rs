@@ -119,6 +119,88 @@ async fn nodes_create_with_parent_and_policy() {
     assert_eq!(child["parent_id"], parent_id);
 }
 
+#[tokio::test]
+async fn nodes_create_rejects_invalid_local_policy_json() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "Bad policy",
+            "local_policy_json": "{\"tokens_max\":\"not-a-number\"}"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn nodes_create_rejects_policy_that_exceeds_parent_constraints() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let parent_resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "Parent node",
+            "local_policy_json": "{\"tokens_max\":100000,\"allowed_tools\":[\"read\"]}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(parent_resp.status(), 201);
+    let parent: Value = parent_resp.json().await.unwrap();
+    let parent_id = parent["id"].as_str().unwrap();
+
+    let child_resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "Child node",
+            "parent_id": parent_id,
+            "local_policy_json": "{\"tokens_max\":200000,\"allowed_tools\":[\"read\",\"exec\"]}"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(child_resp.status(), 400);
+}
+
+#[tokio::test]
+async fn nodes_create_rejects_review_required_false_under_required_parent() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let parent_resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "Parent node",
+            "local_policy_json": "{\"review_required\":true}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(parent_resp.status(), 201);
+    let parent: Value = parent_resp.json().await.unwrap();
+    let parent_id = parent["id"].as_str().unwrap();
+
+    let child_resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "Child node",
+            "parent_id": parent_id,
+            "local_policy_json": "{\"review_required\":false}"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(child_resp.status(), 400);
+}
+
 // ---------------------------------------------------------------------------
 // AC2: PATCH /api/nodes/:id with { "phase": "draft" } returns 400
 // ---------------------------------------------------------------------------
@@ -451,7 +533,7 @@ async fn nodes_effective_policy_review_required_or() {
         .post(format!("{}/api/nodes", base_url(addr)))
         .json(&json!({
             "intent": "parent",
-            "local_policy_json": "{\"review_required\":true}"
+            "local_policy_json": "{\"review_required\":false}"
         }))
         .send()
         .await
@@ -464,7 +546,7 @@ async fn nodes_effective_policy_review_required_or() {
         .json(&json!({
             "intent": "child",
             "parent_id": parent_id,
-            "local_policy_json": "{\"review_required\":false}"
+            "local_policy_json": "{\"review_required\":true}"
         }))
         .send()
         .await
@@ -750,6 +832,108 @@ async fn nodes_patch_policy_allows_tightening() {
         .await
         .unwrap();
     assert_eq!(patch_resp.status(), 200, "tightening policy should succeed");
+}
+
+#[tokio::test]
+async fn nodes_patch_policy_rejects_removing_existing_constraints() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "test",
+            "local_policy_json": "{\"tokens_max\":100000,\"allowed_tools\":[\"read\",\"write\"],\"review_required\":true}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    let node: Value = resp.json().await.unwrap();
+    let id = node["id"].as_str().unwrap();
+
+    let patch_resp = client
+        .patch(format!("{}/api/nodes/{}", base_url(addr), id))
+        .json(&json!({"local_policy": "{\"iterations_max\":5}"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        patch_resp.status(),
+        400,
+        "replacement policy must not remove existing restrictions"
+    );
+}
+
+#[tokio::test]
+async fn nodes_patch_policy_rejects_widening_allowed_tools() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "test",
+            "local_policy_json": "{\"allowed_tools\":[\"read\",\"write\"]}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    let node: Value = resp.json().await.unwrap();
+    let id = node["id"].as_str().unwrap();
+
+    let patch_resp = client
+        .patch(format!("{}/api/nodes/{}", base_url(addr), id))
+        .json(&json!({"local_policy": "{\"allowed_tools\":[\"read\",\"exec\"]}"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        patch_resp.status(),
+        400,
+        "allowed_tools can only be narrowed to a subset"
+    );
+}
+
+#[tokio::test]
+async fn nodes_patch_policy_rejects_loosening_parent_effective_policy() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let parent_resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "parent",
+            "local_policy_json": "{\"tokens_max\":100000,\"allowed_tools\":[\"read\"]}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    let parent: Value = parent_resp.json().await.unwrap();
+    let parent_id = parent["id"].as_str().unwrap();
+
+    let child_resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "child",
+            "parent_id": parent_id
+        }))
+        .send()
+        .await
+        .unwrap();
+    let child: Value = child_resp.json().await.unwrap();
+    let child_id = child["id"].as_str().unwrap();
+
+    let patch_resp = client
+        .patch(format!("{}/api/nodes/{}", base_url(addr), child_id))
+        .json(&json!({"local_policy": "{\"tokens_max\":200000,\"allowed_tools\":[\"read\",\"exec\"]}"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        patch_resp.status(),
+        400,
+        "new child policy must not loosen inherited parent restrictions"
+    );
 }
 
 // ---------------------------------------------------------------------------

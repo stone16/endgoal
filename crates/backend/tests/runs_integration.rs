@@ -554,6 +554,7 @@ async fn runs_patch_output() {
 
     let patch_resp = client
         .patch(format!("{}/api/runs/{}/output", base_url(addr), run_id))
+        .bearer_auth("dev-token")
         .json(&output)
         .send()
         .await
@@ -570,6 +571,44 @@ async fn runs_patch_output() {
     assert!(run["output_json"].is_string(), "output_json should be set");
     let stored_output: Value = serde_json::from_str(run["output_json"].as_str().unwrap()).unwrap();
     assert_eq!(stored_output["confidence"], 0.95);
+}
+
+#[tokio::test]
+async fn runs_patch_output_requires_daemon_token() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+    let node_id = create_active_structured_node(&client, addr).await;
+
+    let dispatch_resp = client
+        .post(format!("{}/api/nodes/{}/runs", base_url(addr), &node_id))
+        .json(&json!({
+            "type": "research_iteration",
+            "runtime": "echo"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dispatch_resp.status(), 201);
+    let dispatched: Value = dispatch_resp.json().await.unwrap();
+    let run_id = dispatched["id"].as_str().unwrap();
+
+    let output = json!({
+        "findings": "spoofed",
+        "concerns": [],
+        "confidence": 1.0,
+        "needs_human_review": false,
+        "assertion_results": {},
+        "metric_values": {},
+        "rubric_scores": {}
+    });
+
+    let patch_resp = client
+        .patch(format!("{}/api/runs/{}/output", base_url(addr), run_id))
+        .json(&output)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(patch_resp.status(), 401);
 }
 
 // ---------------------------------------------------------------------------
@@ -708,6 +747,7 @@ async fn runs_e2e_create_freeze_dispatch_verify_snapshot() {
     });
     let patch_resp = client
         .patch(format!("{}/api/runs/{}/output", base_url(addr), run_id))
+        .bearer_auth("dev-token")
         .json(&output)
         .send()
         .await

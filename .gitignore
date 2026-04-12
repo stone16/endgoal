@@ -32,6 +32,10 @@ Thumbs.db
 
 # Runtime / local state
 /runs/
+endgoal.db
+endgoal.db-shm
+endgoal.db-wal
+scratchpads/
 *.log
 *.pid
 .harness/*/

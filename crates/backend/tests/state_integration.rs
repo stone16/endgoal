@@ -189,6 +189,7 @@ async fn state_progress_formula_mixed_assertions_metric_rubric() {
 
     let patch_resp = client
         .patch(format!("{}/api/runs/{}/output", base_url(addr), &run_id))
+        .bearer_auth("dev-token")
         .json(&output)
         .send()
         .await
@@ -294,6 +295,7 @@ async fn state_all_passing_progress_100() {
 
     client
         .patch(format!("{}/api/runs/{}/output", base_url(addr), &run_id))
+        .bearer_auth("dev-token")
         .json(&output)
         .send()
         .await
@@ -473,6 +475,7 @@ async fn state_llm_stub_returns_mock_next_step() {
     });
     client
         .patch(format!("{}/api/runs/{}/output", base_url(addr), &run_id))
+        .bearer_auth("dev-token")
         .json(&output)
         .send()
         .await
@@ -564,6 +567,7 @@ async fn state_e2e_progress_formula_verification() {
 
     let patch_resp = client
         .patch(format!("{}/api/runs/{}/output", base_url(addr), &run_id))
+        .bearer_auth("dev-token")
         .json(&output)
         .send()
         .await

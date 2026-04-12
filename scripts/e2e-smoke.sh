@@ -229,6 +229,7 @@ event_count="$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM run_events WHERE run_id 
 
 curl_json -X PATCH "$(api_url "/api/runs/$run_id/output")" \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
   --data '{
     "assertion_results": { "a1": "pass" },
     "metric_values": { "m1": 80 },

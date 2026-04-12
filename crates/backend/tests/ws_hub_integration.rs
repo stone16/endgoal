@@ -345,6 +345,118 @@ async fn ws_daemon_disconnect_marks_dispatched_runs_failed() {
     }
 }
 
+#[tokio::test]
+async fn ws_daemon_disconnect_broadcasts_failed_run_update() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let mut daemon_ws = connect_daemon(addr).await;
+    let (_frontend_sink, mut frontend_stream) = connect_frontend(addr).await.split();
+    let node_id = create_active_node(&client, addr).await;
+    let dispatch_resp = client
+        .post(format!("{}/api/nodes/{}/runs", base_url(addr), &node_id))
+        .json(&json!({"type": "research_iteration", "runtime": "echo"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dispatch_resp.status(), 201);
+    let dispatched: Value = dispatch_resp.json().await.unwrap();
+    let run_id = dispatched["id"].as_str().unwrap().to_string();
+
+    let _dispatch_msg = timeout(Duration::from_secs(2), daemon_ws.next())
+        .await
+        .expect("daemon receives dispatch")
+        .unwrap()
+        .unwrap();
+
+    daemon_ws.close(None).await.unwrap();
+
+    let msg_json = loop {
+        let frontend_msg = timeout(Duration::from_secs(2), frontend_stream.next())
+            .await
+            .expect("frontend should receive failed-run invalidation")
+            .expect("frontend stream not closed")
+            .expect("frontend WS message");
+        let msg_text = match frontend_msg {
+            Message::Text(t) => t,
+            other => panic!("expected Text, got: {:?}", other),
+        };
+        let msg_json: Value = serde_json::from_str(&msg_text).unwrap();
+        if msg_json["type"] == "run:updated" && msg_json["id"] == run_id {
+            break msg_json;
+        }
+    };
+
+    assert!(
+        msg_json["type"] == "run:updated",
+        "expected run invalidation for failed run, got {msg_json}"
+    );
+}
+
+#[tokio::test]
+async fn ws_patch_run_output_broadcasts_run_and_node_update() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let mut daemon_ws = connect_daemon(addr).await;
+    let (_frontend_sink, mut frontend_stream) = connect_frontend(addr).await.split();
+    let node_id = create_active_node(&client, addr).await;
+    let dispatch_resp = client
+        .post(format!("{}/api/nodes/{}/runs", base_url(addr), &node_id))
+        .json(&json!({"type": "research_iteration", "runtime": "echo"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dispatch_resp.status(), 201);
+    let dispatched: Value = dispatch_resp.json().await.unwrap();
+    let run_id = dispatched["id"].as_str().unwrap().to_string();
+
+    let _dispatch_msg = timeout(Duration::from_secs(2), daemon_ws.next())
+        .await
+        .expect("daemon receives dispatch")
+        .unwrap()
+        .unwrap();
+
+    let output = json!({
+        "findings": "patched",
+        "concerns": [],
+        "confidence": 0.8,
+        "needs_human_review": false,
+        "assertion_results": {},
+        "metric_values": {},
+        "rubric_scores": {}
+    });
+    let patch_resp = client
+        .patch(format!("{}/api/runs/{}/output", base_url(addr), &run_id))
+        .bearer_auth("dev-token")
+        .json(&output)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(patch_resp.status(), 200);
+
+    let msg_json = loop {
+        let frontend_msg = timeout(Duration::from_secs(2), frontend_stream.next())
+            .await
+            .expect("frontend should receive output invalidation")
+            .expect("frontend stream not closed")
+            .expect("frontend WS message");
+        let msg_text = match frontend_msg {
+            Message::Text(t) => t,
+            other => panic!("expected Text, got: {:?}", other),
+        };
+        let msg_json: Value = serde_json::from_str(&msg_text).unwrap();
+        if msg_json["type"] == "run:updated" && msg_json["id"] == run_id {
+            break msg_json;
+        }
+    };
+
+    assert!(
+        msg_json["type"] == "run:updated",
+        "expected run invalidation for patched output, got {msg_json}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // AC3: POST /api/nodes/:id/runs returns 503 when no daemon connected
 // ---------------------------------------------------------------------------
