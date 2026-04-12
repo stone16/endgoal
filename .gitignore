@@ -34,3 +34,4 @@ runs/
 !.harness/retro/
 !.harness/retro/**
 !.harness/config.json
+.review-loop/
