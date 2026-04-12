@@ -117,6 +117,7 @@ pub fn create_router(pool: SqlitePool) -> Router {
     let state = Arc::new(AppState { pool, hub, llm });
 
     Router::new()
+        .route("/api/health", get(health))
         .route("/api/nodes", get(list_nodes).post(create_node))
         .route("/api/nodes/{id}", get(get_node).patch(patch_node).delete(delete_node))
         .route("/api/nodes/{id}/children", get(get_children))
@@ -145,6 +146,14 @@ pub fn create_router(pool: SqlitePool) -> Router {
         .route("/ws/frontend", any(ws_frontend_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/health — process readiness
+// ---------------------------------------------------------------------------
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
 }
 
 // ---------------------------------------------------------------------------
