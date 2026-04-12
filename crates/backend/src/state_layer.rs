@@ -215,17 +215,10 @@ fn compute_progress_and_confidence(
             .iter()
             .map(|m| {
                 let current = m.current.unwrap_or(0.0);
-                let ratio = if m.target > 0.0 {
-                    (current / m.target).min(1.0)
-                } else {
-                    0.0
-                };
-                ratio
+                if m.target > 0.0 { (current / m.target).min(1.0) } else { 0.0 }
             })
             .sum();
         sum / metric_values.len() as f64
-    } else if has_metrics {
-        0.0
     } else {
         0.0
     };
@@ -243,8 +236,6 @@ fn compute_progress_and_confidence(
             })
             .sum();
         sum / rubric_scores.len() as f64
-    } else if has_rubric {
-        0.0
     } else {
         0.0
     };
