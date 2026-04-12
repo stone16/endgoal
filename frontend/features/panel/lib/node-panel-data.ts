@@ -1,7 +1,11 @@
 import type { Acceptance } from "@/bindings/Acceptance";
 import type { Metric } from "@/bindings/Metric";
+import type { Phase } from "@/bindings/Phase";
 import type { RubricDimension } from "@/bindings/RubricDimension";
 import type { Run } from "@/bindings/Run";
+import type { RunDispatchRequest } from "@/lib/api";
+
+export type TriggerRunGate = "direct" | "archetype_b" | "unavailable";
 
 type RunOutputSummary = {
   findings?: unknown;
@@ -26,6 +30,30 @@ export function sortRunsNewestFirst(runs: Run[]): Run[] {
     (left, right) =>
       new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
   );
+}
+
+export function getTriggerRunGate(
+  phase: Phase,
+  acceptance: Acceptance | null,
+): TriggerRunGate {
+  if (acceptance?.type === "prose") {
+    return "archetype_b";
+  }
+
+  if (acceptance?.type === "structured" && phase === "active") {
+    return "direct";
+  }
+
+  return "unavailable";
+}
+
+export function buildRunDispatchRequest(
+  type: RunDispatchRequest["type"],
+): RunDispatchRequest {
+  return {
+    type,
+    runtime: "echo",
+  };
 }
 
 export function getRunFindingsSnippet(run: Run): string {

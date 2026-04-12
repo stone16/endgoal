@@ -33,12 +33,17 @@ function buildUrl(path: string): string {
   return new URL(path, `${getConfiguredApiUrl()}/`).toString();
 }
 
-async function requestJson<T>(path: string): Promise<T> {
+async function requestJson<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "application/json");
+
   const response = await fetch(buildUrl(path), {
+    ...init,
     cache: "no-store",
-    headers: {
-      Accept: "application/json",
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -90,6 +95,32 @@ export function getNodeChildren(id: string): Promise<Node[]> {
 export function getRuns(nodeId: string): Promise<Run[]> {
   return requestJson<Run[]>(
     `/api/nodes/${encodeURIComponent(nodeId)}/runs`,
+  );
+}
+
+export type DispatchRunResponse = {
+  id: string;
+  status: string;
+};
+
+export type RunDispatchRequest = {
+  type: "research_iteration" | "exploration";
+  runtime: "echo";
+};
+
+export function dispatchRun(
+  nodeId: string,
+  request: RunDispatchRequest,
+): Promise<DispatchRunResponse> {
+  return requestJson<DispatchRunResponse>(
+    `/api/nodes/${encodeURIComponent(nodeId)}/runs`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
   );
 }
 

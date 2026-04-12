@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildRunDispatchRequest,
+  getTriggerRunGate,
   getRunFindingsSnippet,
   parseNodeAcceptance,
   sortRunsNewestFirst,
@@ -98,5 +100,36 @@ describe("node panel data helpers", () => {
     expect(snippet).toBe(
       "This run found a concrete acceptance gap that should be reviewed before completion.",
     );
+  });
+
+  it("routes structured active nodes to direct run dispatch", () => {
+    const acceptance = parseNodeAcceptance(
+      JSON.stringify({
+        type: "structured",
+        assertions: [],
+        metrics: [],
+        rubric: [],
+      }),
+    );
+
+    expect(getTriggerRunGate("active", acceptance)).toBe("direct");
+  });
+
+  it("routes prose acceptance to the Archetype B gate", () => {
+    const acceptance = parseNodeAcceptance(
+      JSON.stringify({
+        type: "prose",
+        text: "still needs freezing",
+      }),
+    );
+
+    expect(getTriggerRunGate("draft", acceptance)).toBe("archetype_b");
+  });
+
+  it("builds the exploration dispatch payload with the frontend runtime", () => {
+    expect(buildRunDispatchRequest("exploration")).toEqual({
+      type: "exploration",
+      runtime: "echo",
+    });
   });
 });
