@@ -615,7 +615,7 @@ mod tests {
 
         // Expected: (0.667 * 0.40 + 0.60 * 0.40 + 0.70 * 0.20) * 100 = 64.67
         assert!(
-            progress >= 63.0 && progress <= 67.0,
+            (63.0..=67.0).contains(&progress),
             "progress {progress} should be in [63, 67]"
         );
         assert!(

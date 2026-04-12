@@ -110,7 +110,7 @@ async fn ws_full_roundtrip_frontend_receives_run_updated() {
     let mut daemon_ws = connect_daemon(addr).await;
 
     // 2. Connect frontend WS
-    let (mut frontend_sink, mut frontend_stream) = connect_frontend(addr).await.split();
+    let (frontend_sink, mut frontend_stream) = connect_frontend(addr).await.split();
     let _ = frontend_sink; // keep sink alive
 
     // 3. Create active node and dispatch run

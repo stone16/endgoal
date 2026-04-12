@@ -286,7 +286,10 @@ async fn state_all_passing_progress_100() {
     assert_eq!(state_resp.status(), 200);
     let state: Value = state_resp.json().await.unwrap();
     assert!(state["progress"].is_number());
-    assert!(state["next_step"].as_str().unwrap().len() > 0, "next_step should be non-empty");
+    assert!(
+        !state["next_step"].as_str().unwrap().is_empty(),
+        "next_step should be non-empty"
+    );
 }
 
 // ---------------------------------------------------------------------------
