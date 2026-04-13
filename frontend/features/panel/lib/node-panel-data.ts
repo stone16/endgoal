@@ -28,7 +28,8 @@ export function parseNodeAcceptance(acceptanceJson: string): Acceptance | null {
 export function sortRunsNewestFirst(runs: Run[]): Run[] {
   return [...runs].sort(
     (left, right) =>
-      new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+      new Date(right.created_at).getTime() -
+      new Date(left.created_at).getTime(),
   );
 }
 

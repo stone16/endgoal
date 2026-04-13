@@ -29,7 +29,7 @@ function node(id: string, parent_id: string | null): Node {
     parent_id,
     intent: `Node ${id}`,
     phase: "active",
-    acceptance_json: "{\"type\":\"prose\",\"text\":\"ship it\"}",
+    acceptance_json: '{"type":"prose","text":"ship it"}',
     local_policy_json: null,
     canonical_artifact_text: null,
     canonical_updated_by_run_id: null,
@@ -73,10 +73,6 @@ describe("objective tree data helpers", () => {
       node("current", "parent"),
     );
 
-    expect(trail.map((item) => item.id)).toEqual([
-      "root",
-      "parent",
-      "current",
-    ]);
+    expect(trail.map((item) => item.id)).toEqual(["root", "parent", "current"]);
   });
 });

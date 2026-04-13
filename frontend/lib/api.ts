@@ -119,21 +119,15 @@ export function getNodeState(id: string, rollupDepth = 1): Promise<NodeState> {
 }
 
 export function getNodeAncestors(id: string): Promise<Node[]> {
-  return requestJson<Node[]>(
-    `/api/nodes/${encodeURIComponent(id)}/ancestors`,
-  );
+  return requestJson<Node[]>(`/api/nodes/${encodeURIComponent(id)}/ancestors`);
 }
 
 export function getNodeChildren(id: string): Promise<Node[]> {
-  return requestJson<Node[]>(
-    `/api/nodes/${encodeURIComponent(id)}/children`,
-  );
+  return requestJson<Node[]>(`/api/nodes/${encodeURIComponent(id)}/children`);
 }
 
 export function getRuns(nodeId: string): Promise<Run[]> {
-  return requestJson<Run[]>(
-    `/api/nodes/${encodeURIComponent(nodeId)}/runs`,
-  );
+  return requestJson<Run[]>(`/api/nodes/${encodeURIComponent(nodeId)}/runs`);
 }
 
 export type DispatchRunResponse = {

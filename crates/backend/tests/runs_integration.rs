@@ -66,6 +66,21 @@ fn base_url(addr: SocketAddr) -> String {
     format!("http://{}", addr)
 }
 
+async fn force_node_active(tmp: &tempfile::TempDir, node_id: &str) {
+    let db_url = format!("sqlite://{}?mode=rwc", tmp.path().join("test.db").display());
+    let pool = endgoal_backend::create_pool(&db_url).await.expect("pool");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query("UPDATE nodes SET phase = 'active', updated_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(node_id)
+        .execute(&pool)
+        .await
+        .expect("force active node");
+
+    pool.close().await;
+}
+
 /// Helper: create a node with structured acceptance, activate it, return node ID.
 async fn create_active_structured_node(client: &Client, addr: SocketAddr) -> String {
     let resp = client
@@ -141,35 +156,14 @@ async fn runs_dispatch_active_structured_returns_dispatched() {
 
 #[tokio::test]
 async fn runs_dispatch_prose_acceptance_returns_requires_freeze() {
-    let (addr, _tmp) = start_server().await;
+    let (addr, tmp) = start_server().await;
     let client = Client::new();
     let node_id = create_prose_node(&client, addr).await;
 
-    // Need to manually set phase to active for this test since prose can't activate
-    // via the normal endpoint. We'll test against a prose node that is active.
-    // Actually, prose can't be activated (Draft->Active blocked by prose acceptance).
-    // But the spec says: dispatch on prose-acceptance returns requires_freeze.
-    // A prose node stuck at Draft would fail the wrong_phase check first.
-    // The exploration bypass test (AC8) covers the prose+active scenario.
-    // For this AC, we'll create a structured node but with prose acceptance
-    // by directly inserting to DB. Let's instead test prose on Active by
-    // using the API approach: create structured, activate, then we'll
-    // manually update acceptance to prose via DB... but that's impure.
-    //
-    // Better interpretation: the requires_freeze check applies when:
-    // - Node IS Active but acceptance is prose, AND run type != exploration
-    // Actually, the activate endpoint already blocks prose->active.
-    // So requires_freeze can only trigger if acceptance is changed AFTER activation,
-    // or we need to test the ordering of checks:
-    // Phase must be Active first, then acceptance must be structured.
-    // A Draft+prose node hits wrong_phase before requires_freeze.
-    //
-    // For this test, we use the prose node (which is Draft) to prove
-    // that wrong_phase takes precedence. And we have a separate test
-    // specifically for the requires_freeze error via a workaround.
+    // Activation correctly rejects prose acceptance through the public API.
+    // Force the phase here to verify dispatch's own Active+Prose guard.
+    force_node_active(&tmp, &node_id).await;
 
-    // A prose node can't be activated, so it stays Draft.
-    // Dispatching on Draft should return wrong_phase.
     let resp = client
         .post(format!("{}/api/nodes/{}/runs", base_url(addr), &node_id))
         .json(&json!({
@@ -182,7 +176,7 @@ async fn runs_dispatch_prose_acceptance_returns_requires_freeze() {
 
     assert_eq!(resp.status(), 422);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["error"], "wrong_phase");
+    assert_eq!(body["error"], "requires_freeze");
 }
 
 // ---------------------------------------------------------------------------
@@ -460,15 +454,11 @@ async fn runs_reject_active_returns_400() {
 
 #[tokio::test]
 async fn runs_exploration_bypasses_structured_check() {
-    let (addr, _tmp) = start_server().await;
+    let (addr, tmp) = start_server().await;
     let client = Client::new();
 
-    // Create a node with structured acceptance (so it can be activated)
-    // then we'd need to switch to prose... but the API doesn't allow that.
-    // The spec says exploration bypasses the structured-acceptance check.
-    // Since we can't activate a prose node through normal API, we test
-    // that exploration on an Active+Structured node still works.
-    let node_id = create_active_structured_node(&client, addr).await;
+    let node_id = create_prose_node(&client, addr).await;
+    force_node_active(&tmp, &node_id).await;
 
     let resp = client
         .post(format!("{}/api/nodes/{}/runs", base_url(addr), &node_id))

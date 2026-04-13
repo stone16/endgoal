@@ -28,7 +28,9 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   const [selectedRun, setSelectedRun] = useState<SelectedRun | null>(null);
   const [reviewReason, setReviewReason] = useState("");
-  const [reviewActionError, setReviewActionError] = useState<string | null>(null);
+  const [reviewActionError, setReviewActionError] = useState<string | null>(
+    null,
+  );
   const [isReviewActionBusy, setIsReviewActionBusy] = useState(false);
   const { node, state, acceptance, runs, isLoading, error, refresh } =
     useNodePanelData(nodeId);
@@ -155,8 +157,9 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
     };
   }, [nodeId, onClose, selectedRunId]);
 
-  const selectedRunModel =
-    selectedRunId ? runs.find((run) => run.id === selectedRunId) ?? null : null;
+  const selectedRunModel = selectedRunId
+    ? (runs.find((run) => run.id === selectedRunId) ?? null)
+    : null;
 
   if (!nodeId) {
     return null;

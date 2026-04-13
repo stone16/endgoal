@@ -21,7 +21,7 @@ describe("freeze session data helpers", () => {
       JSON.stringify([
         {
           layer: "assertions",
-          item_json: "{\"id\":\"a1\",\"text\":\"specific\",\"status\":\"pending\"}",
+          item_json: '{"id":"a1","text":"specific","status":"pending"}',
         },
       ]),
     );
@@ -48,7 +48,9 @@ describe("freeze session data helpers", () => {
     }
 
     expect(item.value.text).toBe("artifact is reproducible");
-    expect(serializeEditableFreezeItem(item)).toContain("artifact is reproducible");
+    expect(serializeEditableFreezeItem(item)).toContain(
+      "artifact is reproducible",
+    );
   });
 
   it("falls back to safe defaults for metric proposal JSON", () => {

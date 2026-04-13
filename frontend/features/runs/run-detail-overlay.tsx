@@ -153,7 +153,10 @@ function parseInputSnapshot(raw: string | null | undefined): {
   }
 }
 
-function parseStreamEvent(data: string, eventType: string): RunStreamEvent | null {
+function parseStreamEvent(
+  data: string,
+  eventType: string,
+): RunStreamEvent | null {
   try {
     const parsed = JSON.parse(data) as Record<string, unknown>;
     const rawSeq = parsed.seq;
@@ -241,7 +244,9 @@ function RunDetailOverlayContent({
       setFetchedRun(nextRun);
       setLoadError(null);
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "Run failed to load");
+      setLoadError(
+        error instanceof Error ? error.message : "Run failed to load",
+      );
     }
   }, [runId]);
 
@@ -468,7 +473,10 @@ function RunDetailOverlayContent({
                 ) : null}
                 {inputSnapshot.value ? (
                   <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-3">
-                    <JsonTree label="run_input_snapshot" value={inputSnapshot.value} />
+                    <JsonTree
+                      label="run_input_snapshot"
+                      value={inputSnapshot.value}
+                    />
                   </div>
                 ) : null}
               </section>

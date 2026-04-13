@@ -69,6 +69,21 @@ fn base_url(addr: SocketAddr) -> String {
     format!("http://{}", addr)
 }
 
+async fn mark_run_completed(tmp: &tempfile::TempDir, run_id: &str) {
+    let db_url = format!("sqlite://{}?mode=rwc", tmp.path().join("test.db").display());
+    let pool = endgoal_backend::create_pool(&db_url).await.expect("pool");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query("UPDATE runs SET status = 'completed', ended_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("mark run completed");
+
+    pool.close().await;
+}
+
 /// Create a structured node with 3 assertions, 1 metric, 1 rubric.
 /// Returns (node_id, acceptance_json).
 async fn create_structured_node(client: &Client, addr: SocketAddr) -> String {
@@ -130,10 +145,7 @@ async fn dispatch_run(client: &Client, addr: SocketAddr, node_id: &str) -> Strin
 
 #[tokio::test]
 async fn state_progress_formula_mixed_assertions_metric_rubric() {
-    // This tests the state_at() function directly via unit tests in state_layer.rs.
-    // The integration-level version is covered in the E2E test below.
-    // Here we verify via the HTTP endpoint with known data.
-    let (addr, _tmp) = start_server().await;
+    let (addr, tmp) = start_server().await;
     let client = Client::new();
 
     // Create node with 2 pass / 1 fail assertions, metric at 60%, rubric 7/10
@@ -196,47 +208,22 @@ async fn state_progress_formula_mixed_assertions_metric_rubric() {
         .unwrap();
     assert_eq!(patch_resp.status(), 200);
 
-    // Mark the run as completed via a terminal WS message
-    // We'll use the state endpoint — it reads "latest completed run".
-    // First we need to mark it as completed by manipulating DB status.
-    // For now, test that the state endpoint exists and returns correct shape,
-    // then the unit tests in state_layer module will verify the formula.
+    mark_run_completed(&tmp, &run_id).await;
 
-    // GET /api/nodes/:id/state — should return a NodeState
     let state_resp = client
         .get(format!("{}/api/nodes/{}/state", base_url(addr), &node_id))
         .send()
         .await
         .unwrap();
-    // Should return 200 with NodeState JSON
     assert_eq!(state_resp.status(), 200, "GET /state should return 200");
     let state: Value = state_resp.json().await.unwrap();
 
-    // Verify shape
+    let progress = state["progress"].as_f64().unwrap();
     assert!(
-        state["state"].is_string(),
-        "state.state should be string (Phase)"
+        (63.0..=67.0).contains(&progress),
+        "expected progress around 64.67, got {progress}"
     );
-    assert!(
-        state["progress"].is_number(),
-        "state.progress should be number"
-    );
-    assert!(
-        state["confidence"].is_number(),
-        "state.confidence should be number"
-    );
-    assert!(
-        state["next_step"].is_string(),
-        "state.next_step should be string"
-    );
-    assert!(
-        state["effective_policy"].is_object(),
-        "state.effective_policy should be object"
-    );
-    assert!(
-        state["rollup_blockers"].is_array(),
-        "state.rollup_blockers should be array"
-    );
+    assert_eq!(state["confidence"].as_f64().unwrap(), 0.7);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +232,7 @@ async fn state_progress_formula_mixed_assertions_metric_rubric() {
 
 #[tokio::test]
 async fn state_all_passing_progress_100() {
-    let (addr, _tmp) = start_server().await;
+    let (addr, tmp) = start_server().await;
     let client = Client::new();
 
     let acceptance = json!({
@@ -301,7 +288,8 @@ async fn state_all_passing_progress_100() {
         .await
         .unwrap();
 
-    // Unit test covers exact formula; here we verify HTTP shape
+    mark_run_completed(&tmp, &run_id).await;
+
     let state_resp = client
         .get(format!("{}/api/nodes/{}/state", base_url(addr), &node_id))
         .send()
@@ -309,7 +297,7 @@ async fn state_all_passing_progress_100() {
         .unwrap();
     assert_eq!(state_resp.status(), 200);
     let state: Value = state_resp.json().await.unwrap();
-    assert!(state["progress"].is_number());
+    assert_eq!(state["progress"].as_f64().unwrap(), 100.0);
     assert!(
         !state["next_step"].as_str().unwrap().is_empty(),
         "next_step should be non-empty"
@@ -505,7 +493,7 @@ async fn state_llm_stub_returns_mock_next_step() {
 
 #[tokio::test]
 async fn state_e2e_progress_formula_verification() {
-    let (addr, _tmp) = start_server().await;
+    let (addr, tmp) = start_server().await;
     let client = Client::new();
 
     // 1. Create node with 3 assertions, 1 metric, 1 rubric
@@ -574,14 +562,7 @@ async fn state_e2e_progress_formula_verification() {
         .unwrap();
     assert_eq!(patch_resp.status(), 200);
 
-    // 5. We need to mark the run as 'completed'. We'll simulate the daemon Terminal message.
-    // Since this is an integration test, we need to mark it completed via DB.
-    // The test helper marks it via WS terminal flow.
-    // For now we test that GET /state returns 200 and correct shape.
-    // The exact progress value test will be in state_layer unit tests.
-    // state_at() reads runs WHERE status='completed'.
-    // In this test we've only dispatched, not completed — so progress=0.
-    // This tests the endpoint exists and shape is correct even with no completed runs.
+    mark_run_completed(&tmp, &run_id).await;
 
     let state_resp = client
         .get(format!("{}/api/nodes/{}/state", base_url(addr), &node_id))
@@ -591,16 +572,16 @@ async fn state_e2e_progress_formula_verification() {
     assert_eq!(state_resp.status(), 200);
     let state: Value = state_resp.json().await.unwrap();
 
-    // Verify shape and that all fields are populated
     assert_eq!(state["state"].as_str().unwrap(), "active");
-    assert!(state["progress"].is_number());
+    let progress = state["progress"].as_f64().unwrap();
+    assert!(
+        (63.0..=67.0).contains(&progress),
+        "expected progress around 64.67, got {progress}"
+    );
     assert!(state["confidence"].is_number());
     assert!(state["next_step"].is_string() && !state["next_step"].as_str().unwrap().is_empty());
     assert!(state["effective_policy"].is_object());
     assert!(state["rollup_blockers"].is_array());
-
-    // With no completed run, progress=0
-    assert_eq!(state["progress"].as_f64().unwrap(), 0.0);
 }
 
 // ---------------------------------------------------------------------------

@@ -32,7 +32,10 @@ pub fn ensure_scratchpad_in(root: &std::path::Path, run_id: &str) -> std::io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_ensure_scratchpad_creates_directory() {
@@ -81,6 +84,8 @@ mod tests {
 
     #[test]
     fn test_ensure_scratchpad_uses_env_root_wrapper() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+
         struct EnvGuard {
             key: &'static str,
             original: Option<std::ffi::OsString>,

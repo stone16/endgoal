@@ -2,10 +2,7 @@
 
 import type { AssertionStatus } from "@/bindings/AssertionStatus";
 import type { FreezeProposal } from "@/bindings/FreezeProposal";
-import type {
-  FreezeLayerCompleteEvent,
-  FreezeStreamEvent,
-} from "@/lib/api";
+import type { FreezeLayerCompleteEvent, FreezeStreamEvent } from "@/lib/api";
 import {
   commitFreezeSession,
   getActiveFreezeSession,
@@ -224,7 +221,10 @@ function EditableProposalFields({
                   kind: "metric",
                   value: {
                     ...metric,
-                    target: parseRequiredNumber(event.target.value, metric.target),
+                    target: parseRequiredNumber(
+                      event.target.value,
+                      metric.target,
+                    ),
                   },
                 })
               }
@@ -299,7 +299,10 @@ function EditableProposalFields({
                   kind: "rubric",
                   value: {
                     ...rubric,
-                    scale: parseRequiredNumber(event.target.value, rubric.scale),
+                    scale: parseRequiredNumber(
+                      event.target.value,
+                      rubric.scale,
+                    ),
                   },
                 })
               }
@@ -333,7 +336,9 @@ function EditableProposalFields({
       Item JSON
       <textarea
         value={item.value}
-        onChange={(event) => onChange({ kind: "json", value: event.target.value })}
+        onChange={(event) =>
+          onChange({ kind: "json", value: event.target.value })
+        }
         className="min-h-32 resize-y rounded-md border border-stone-300 bg-white p-3 font-mono text-xs leading-6 text-stone-900 outline-none transition-colors focus:border-emerald-500"
       />
     </label>
@@ -344,7 +349,10 @@ function LayerProgress({ currentLayer }: { currentLayer: FreezeLayer }) {
   const currentIndex = layerProgressIndex(currentLayer);
 
   return (
-    <ol className="grid gap-2 sm:grid-cols-4" aria-label="Freeze layer progress">
+    <ol
+      className="grid gap-2 sm:grid-cols-4"
+      aria-label="Freeze layer progress"
+    >
       {LAYERS.map((layer, index) => {
         const isComplete = index < currentIndex;
         const isCurrent = index === currentIndex;
@@ -374,12 +382,10 @@ export function FreezeSession({ nodeId }: FreezeSessionProps) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [currentLayer, setCurrentLayer] = useState<FreezeLayer>("assertions");
   const [approvedItems, setApprovedItems] = useState<ApprovedFreezeItem[]>([]);
-  const [pendingProposal, setPendingProposal] = useState<PendingProposal | null>(
-    null,
-  );
-  const [layerCompletion, setLayerCompletion] = useState<LayerCompletion | null>(
-    null,
-  );
+  const [pendingProposal, setPendingProposal] =
+    useState<PendingProposal | null>(null);
+  const [layerCompletion, setLayerCompletion] =
+    useState<LayerCompletion | null>(null);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [userResponse, setUserResponse] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -459,51 +465,54 @@ export function FreezeSession({ nodeId }: FreezeSessionProps) {
     ]);
   }, []);
 
-  const requestProposal = useCallback(async ({
-    action,
-    approvedItemJson,
-    response,
-    targetSessionId,
-  }: {
-    action: "start" | "approve" | "edit" | "reject" | "skip_layer";
-    approvedItemJson?: string;
-    response: string;
-    targetSessionId: string;
-  }): Promise<boolean> => {
-    setIsSending(true);
-    setError(null);
+  const requestProposal = useCallback(
+    async ({
+      action,
+      approvedItemJson,
+      response,
+      targetSessionId,
+    }: {
+      action: "start" | "approve" | "edit" | "reject" | "skip_layer";
+      approvedItemJson?: string;
+      response: string;
+      targetSessionId: string;
+    }): Promise<boolean> => {
+      setIsSending(true);
+      setError(null);
 
-    try {
-      const event = await respondFreezeSession(nodeId, {
-        action,
-        approved_item_json: approvedItemJson,
-        session_id: targetSessionId,
-        user_response: response,
-      });
+      try {
+        const event = await respondFreezeSession(nodeId, {
+          action,
+          approved_item_json: approvedItemJson,
+          session_id: targetSessionId,
+          user_response: response,
+        });
 
-      if (!mountedRef.current) {
+        if (!mountedRef.current) {
+          return false;
+        }
+
+        handleStreamEvent(event);
+        return true;
+      } catch (requestError) {
+        if (!mountedRef.current) {
+          return false;
+        }
+
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Freeze session request failed",
+        );
         return false;
+      } finally {
+        if (mountedRef.current) {
+          setIsSending(false);
+        }
       }
-
-      handleStreamEvent(event);
-      return true;
-    } catch (requestError) {
-      if (!mountedRef.current) {
-        return false;
-      }
-
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Freeze session request failed",
-      );
-      return false;
-    } finally {
-      if (mountedRef.current) {
-        setIsSending(false);
-      }
-    }
-  }, [handleStreamEvent, nodeId]);
+    },
+    [handleStreamEvent, nodeId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -526,7 +535,9 @@ export function FreezeSession({ nodeId }: FreezeSessionProps) {
         const acceptance = parseNodeAcceptance(node.acceptance_json);
 
         if (!activeSession && acceptance?.type === "structured") {
-          router.replace(`/nodes/${encodeURIComponent(nodeId)}?panel=${encodeURIComponent(nodeId)}`);
+          router.replace(
+            `/nodes/${encodeURIComponent(nodeId)}?panel=${encodeURIComponent(nodeId)}`,
+          );
           return;
         }
 
@@ -670,7 +681,9 @@ export function FreezeSession({ nodeId }: FreezeSessionProps) {
 
     try {
       await commitFreezeSession(nodeId, sessionId);
-      router.push(`/nodes/${encodeURIComponent(nodeId)}?panel=${encodeURIComponent(nodeId)}`);
+      router.push(
+        `/nodes/${encodeURIComponent(nodeId)}?panel=${encodeURIComponent(nodeId)}`,
+      );
     } catch (commitError) {
       setError(
         commitError instanceof Error
@@ -697,7 +710,11 @@ export function FreezeSession({ nodeId }: FreezeSessionProps) {
             </div>
             <button
               type="button"
-              onClick={() => router.push(`/nodes/${encodeURIComponent(nodeId)}?panel=${encodeURIComponent(nodeId)}`)}
+              onClick={() =>
+                router.push(
+                  `/nodes/${encodeURIComponent(nodeId)}?panel=${encodeURIComponent(nodeId)}`,
+                )
+              }
               className="inline-flex h-11 items-center justify-center rounded-md border border-stone-300 px-4 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:text-stone-950"
             >
               Back to node
@@ -751,9 +768,13 @@ export function FreezeSession({ nodeId }: FreezeSessionProps) {
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">
-                            {FREEZE_LAYER_LABEL[
-                              normalizeFreezeLayer(pendingProposal.proposal.layer)
-                            ]}
+                            {
+                              FREEZE_LAYER_LABEL[
+                                normalizeFreezeLayer(
+                                  pendingProposal.proposal.layer,
+                                )
+                              ]
+                            }
                           </p>
                           <h2 className="mt-1 text-lg font-semibold text-stone-950">
                             Proposed acceptance item
@@ -791,7 +812,9 @@ export function FreezeSession({ nodeId }: FreezeSessionProps) {
                         Feedback
                         <textarea
                           value={userResponse}
-                          onChange={(event) => setUserResponse(event.target.value)}
+                          onChange={(event) =>
+                            setUserResponse(event.target.value)
+                          }
                           className="min-h-24 resize-y rounded-md border border-stone-300 bg-white p-3 text-sm leading-6 text-stone-900 outline-none transition-colors focus:border-emerald-500"
                           placeholder="make it more specific"
                         />

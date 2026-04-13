@@ -32,8 +32,8 @@ export function WorkspaceOverview() {
             </h1>
             <p className="mt-3 text-base leading-7 text-stone-600">
               Top-level objectives only. Live node updates invalidate this view
-              automatically, and each card keeps the state layer&apos;s next step
-              visible without drilling into the tree.
+              automatically, and each card keeps the state layer&apos;s next
+              step visible without drilling into the tree.
             </p>
           </div>
 
@@ -52,7 +52,9 @@ export function WorkspaceOverview() {
       <section className="flex-1 py-8">
         {error ? (
           <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-            <div className="font-semibold">Workspace overview failed to load</div>
+            <div className="font-semibold">
+              Workspace overview failed to load
+            </div>
             <p className="mt-1">{error}</p>
           </div>
         ) : null}

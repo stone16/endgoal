@@ -34,7 +34,9 @@ function safeParseJson(value: string): unknown {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function stringValue(value: unknown, fallback = ""): string {
@@ -60,7 +62,9 @@ function assertionStatus(value: unknown): AssertionStatus {
     : "pending";
 }
 
-export function normalizeFreezeLayer(layer: string | null | undefined): FreezeLayer {
+export function normalizeFreezeLayer(
+  layer: string | null | undefined,
+): FreezeLayer {
   if (layer === "assertion" || layer === "assertions") {
     return "assertions";
   }
@@ -90,7 +94,8 @@ export function parseApprovedFreezeItems(
         .map((item) => asRecord(item))
         .filter(
           (item) =>
-            typeof item.layer === "string" && typeof item.item_json === "string",
+            typeof item.layer === "string" &&
+            typeof item.item_json === "string",
         )
         .map((item) => ({
           layer: stringValue(item.layer),

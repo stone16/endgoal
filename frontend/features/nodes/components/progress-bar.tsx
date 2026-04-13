@@ -9,10 +9,7 @@ const TONE_CLASS: Record<NonNullable<ProgressBarProps["tone"]>, string> = {
   stone: "bg-stone-400",
 };
 
-export function ProgressBar({
-  value,
-  tone = "indigo",
-}: ProgressBarProps) {
+export function ProgressBar({ value, tone = "indigo" }: ProgressBarProps) {
   const clampedValue = Number.isFinite(value)
     ? Math.min(Math.max(value, 0), 100)
     : 0;

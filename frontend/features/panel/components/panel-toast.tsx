@@ -6,7 +6,10 @@ type PanelToastProps = {
   } | null;
 };
 
-const TOAST_CLASS: Record<NonNullable<PanelToastProps["toast"]>["tone"], string> = {
+const TOAST_CLASS: Record<
+  NonNullable<PanelToastProps["toast"]>["tone"],
+  string
+> = {
   success: "border-emerald-200 bg-emerald-50 text-emerald-800",
   error: "border-rose-200 bg-rose-50 text-rose-800",
 };

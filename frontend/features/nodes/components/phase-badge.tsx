@@ -1,9 +1,6 @@
 import type { Phase } from "@/bindings/Phase";
 
-const PHASE_CONFIG: Record<
-  Phase,
-  { label: string; className: string }
-> = {
+const PHASE_CONFIG: Record<Phase, { label: string; className: string }> = {
   draft: {
     label: "Draft",
     className: "bg-stone-100 text-stone-700 ring-stone-200",

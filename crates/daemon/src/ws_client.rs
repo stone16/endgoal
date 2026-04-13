@@ -237,20 +237,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_dispatch_nonexistent_binary_returns_failed() {
+    async fn test_handle_dispatch_echo_runtime_returns_completed() {
         let tmp = tempdir().unwrap();
-        // Register a fake adapter that tries to run a nonexistent binary
-        // Instead, we use the spawn_process directly via a dispatch with echo adapter
-        // that we know works. For nonexistent binary, we test via adapters::spawn_process
-        // in adapters tests. Here we test through handle_dispatch with a runtime that
-        // is known to exist but the binary doesn't (we can't easily do this with
-        // get_adapter). Instead, test that a failed process returns "failed" terminal.
-
-        // Use `false` command which exits with code 1
-        // We need a custom adapter for this, but since we can't register one dynamically,
-        // let's test via spawn_process in the adapter tests.
-
-        // For this test, verify that the echo adapter with a good command works
         let dispatch = make_test_dispatch("test-good", "echo", "works");
         let messages = handle_dispatch(&dispatch, Some(tmp.path())).await;
 
@@ -261,6 +249,7 @@ mod tests {
         assert_eq!(terminals.len(), 1);
         if let WsDaemonMessage::Terminal(terminal) = &terminals[0] {
             assert_eq!(terminal.status, "completed");
+            assert!(terminal.error.is_none());
         }
     }
 

@@ -39,7 +39,8 @@ export function ArchetypeBGateModal({
             Freeze acceptance before a normal run
           </h2>
           <p className="mt-3 text-sm leading-6 text-stone-600">
-            Exploration can proceed now, or freeze the acceptance criteria first.
+            Exploration can proceed now, or freeze the acceptance criteria
+            first.
           </p>
 
           <div className="mt-5 grid gap-3">

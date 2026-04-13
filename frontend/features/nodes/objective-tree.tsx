@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 
 import type { Node } from "@/bindings/Node";
 import { ObjectiveTreeRow } from "@/features/nodes/components/objective-tree-row";
@@ -64,15 +64,12 @@ export function ObjectiveTree({
   initialSelectedNodeId?: string | null;
   rootId: string;
 }) {
-  const { ancestors, root, isLoading, error, refresh } = useObjectiveTree(rootId);
+  const { ancestors, root, isLoading, error, refresh } =
+    useObjectiveTree(rootId);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(
     initialSelectedNodeId,
   );
   const closePanel = useCallback(() => setSelectedNodeId(null), []);
-  const selectedNode = useMemo(
-    () => (selectedNodeId ? selectedNodeId : null),
-    [selectedNodeId],
-  );
 
   return (
     <>
@@ -134,7 +131,7 @@ export function ObjectiveTree({
               <ObjectiveTreeRow
                 item={root}
                 depth={0}
-                selectedNodeId={selectedNode}
+                selectedNodeId={selectedNodeId}
                 onSelect={setSelectedNodeId}
               />
             </div>
@@ -142,7 +139,7 @@ export function ObjectiveTree({
         </section>
       </main>
 
-      <NodePanel nodeId={selectedNode} onClose={closePanel} />
+      <NodePanel nodeId={selectedNodeId} onClose={closePanel} />
     </>
   );
 }
