@@ -1,11 +1,22 @@
 import type { Phase } from "@/bindings/Phase";
 
-const ACTIONS = ["Edit Intent", "Trigger Run", "Add Note", "Archive"];
+type PanelAction = "Edit Intent" | "Trigger Run" | "Add Note" | "Archive";
+
+const ACTIONS: PanelAction[] = [
+  "Edit Intent",
+  "Trigger Run",
+  "Add Note",
+  "Archive",
+];
 
 type PanelActionsProps = {
+  archiveActionError: string | null;
+  archiveDisabled: boolean;
   phase: Phase;
+  isArchiveActionBusy: boolean;
   isTriggerRunBusy: boolean;
   isReviewActionBusy: boolean;
+  onArchive: () => void;
   onApproveReview: () => void;
   onRejectReview: () => void;
   onReviewReasonChange: (value: string) => void;
@@ -16,9 +27,13 @@ type PanelActionsProps = {
 };
 
 export function PanelActions({
+  archiveActionError,
+  archiveDisabled,
   phase,
+  isArchiveActionBusy,
   isTriggerRunBusy,
   isReviewActionBusy,
+  onArchive,
   onApproveReview,
   onRejectReview,
   onReviewReasonChange,
@@ -74,24 +89,44 @@ export function PanelActions({
       <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-stone-500">
         Actions
       </h2>
+      {archiveActionError ? (
+        <p className="mt-3 text-sm text-rose-700">{archiveActionError}</p>
+      ) : null}
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        {ACTIONS.map((action) => (
-          <button
-            key={action}
-            type="button"
-            onClick={action === "Trigger Run" ? onTriggerRun : undefined}
-            disabled={
-              action === "Trigger Run"
-                ? triggerRunDisabled || isTriggerRunBusy
-                : false
-            }
-            className="inline-flex h-10 items-center justify-center rounded-md border border-stone-300 px-3 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:text-stone-950"
-          >
-            {action === "Trigger Run" && isTriggerRunBusy
+        {ACTIONS.map((action) => {
+          const isPlaceholder =
+            action === "Edit Intent" || action === "Add Note";
+          const isDisabled =
+            isPlaceholder ||
+            (action === "Trigger Run" &&
+              (triggerRunDisabled || isTriggerRunBusy)) ||
+            (action === "Archive" && (archiveDisabled || isArchiveActionBusy));
+          const label =
+            action === "Trigger Run" && isTriggerRunBusy
               ? "Dispatching"
-              : action}
-          </button>
-        ))}
+              : action === "Archive" && isArchiveActionBusy
+                ? "Archiving"
+                : action;
+
+          return (
+            <button
+              key={action}
+              type="button"
+              onClick={
+                action === "Trigger Run"
+                  ? onTriggerRun
+                  : action === "Archive"
+                    ? onArchive
+                    : undefined
+              }
+              disabled={isDisabled}
+              title={isPlaceholder ? "Not available in this build" : undefined}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-stone-300 px-3 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:text-stone-950 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-stone-300 disabled:hover:text-stone-700"
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
     </section>
   );

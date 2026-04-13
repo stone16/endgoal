@@ -186,8 +186,10 @@ async fn create_node(
     let acceptance = req
         .acceptance_json
         .unwrap_or_else(|| r#"{"type":"prose","text":""}"#.to_string());
-    let _: Acceptance = serde_json::from_str(&acceptance)
+    let acceptance: Acceptance = serde_json::from_str(&acceptance)
         .map_err(|e| AppError::BadRequest(format!("invalid acceptance_json: {e}")))?;
+    let acceptance = serde_json::to_string(&acceptance)
+        .map_err(|e| AppError::Internal(format!("failed to serialize acceptance: {e}")))?;
 
     let local_policy_json = if let Some(policy_json) = req.local_policy_json {
         let policy: Policy = serde_json::from_str(&policy_json)

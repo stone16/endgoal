@@ -192,6 +192,12 @@ export function rejectNode(
   });
 }
 
+export function archiveNode(id: string): Promise<Node> {
+  return requestJson<Node>(`/api/nodes/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 export type NodeAncestorsResponse = AncestorSummary[];
 
 export type FreezeActiveSession = {

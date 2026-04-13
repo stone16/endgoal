@@ -12,7 +12,12 @@ import { RunsList } from "@/features/panel/components/runs-list";
 import { useNodePanelData } from "@/features/panel/hooks/use-node-panel-data";
 import { useRunTrigger } from "@/features/panel/hooks/use-run-trigger";
 import { RunDetailOverlay } from "@/features/runs/run-detail-overlay";
-import { approveNode, rejectNode, type RejectNodeRequest } from "@/lib/api";
+import {
+  approveNode,
+  archiveNode,
+  rejectNode,
+  type RejectNodeRequest,
+} from "@/lib/api";
 
 type NodePanelProps = {
   nodeId: string | null;
@@ -31,7 +36,11 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
   const [reviewActionError, setReviewActionError] = useState<string | null>(
     null,
   );
+  const [archiveActionError, setArchiveActionError] = useState<string | null>(
+    null,
+  );
   const [isReviewActionBusy, setIsReviewActionBusy] = useState(false);
+  const [isArchiveActionBusy, setIsArchiveActionBusy] = useState(false);
   const { node, state, acceptance, runs, isLoading, error, refresh } =
     useNodePanelData(nodeId);
   const runTrigger = useRunTrigger({
@@ -110,6 +119,26 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
       setIsReviewActionBusy(false);
     }
   }, [buildRejectRequest, node, refresh]);
+
+  const archiveCurrentNode = useCallback(async () => {
+    if (!node) {
+      return;
+    }
+
+    setIsArchiveActionBusy(true);
+    setArchiveActionError(null);
+
+    try {
+      await archiveNode(node.id);
+      await refresh();
+    } catch (archiveError) {
+      setArchiveActionError(
+        archiveError instanceof Error ? archiveError.message : "Archive failed",
+      );
+    } finally {
+      setIsArchiveActionBusy(false);
+    }
+  }, [node, refresh]);
 
   useEffect(() => {
     if (!nodeId) {
@@ -236,9 +265,17 @@ export function NodePanel({ nodeId, onClose }: NodePanelProps) {
                 }}
               />
               <PanelActions
+                archiveActionError={archiveActionError}
+                archiveDisabled={
+                  node.phase === "archived" || node.phase === "complete"
+                }
                 phase={node.phase}
+                isArchiveActionBusy={isArchiveActionBusy}
                 isReviewActionBusy={isReviewActionBusy}
                 isTriggerRunBusy={runTrigger.isDispatching}
+                onArchive={() => {
+                  void archiveCurrentNode();
+                }}
                 onApproveReview={() => {
                   void approveReview();
                 }}

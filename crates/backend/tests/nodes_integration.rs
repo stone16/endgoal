@@ -85,6 +85,42 @@ async fn nodes_create_returns_all_fields() {
 }
 
 #[tokio::test]
+async fn nodes_create_canonicalizes_acceptance_json() {
+    let (addr, _tmp) = start_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{}/api/nodes", base_url(addr)))
+        .json(&json!({
+            "intent": "Build the structured thing",
+            "acceptance_json": "{\"type\":\"structured\",\"assertions\":[{\"id\":\"a1\",\"text\":\"it works\",\"status\":\"pending\"}],\"metrics\":[{\"id\":\"m1\",\"name\":\"coverage\",\"target\":80,\"unit\":\"%\"}],\"rubric\":[{\"id\":\"r1\",\"dimension\":\"quality\",\"scale\":10}]}"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 201);
+    let body: Value = resp.json().await.unwrap();
+    let acceptance: Value =
+        serde_json::from_str(body["acceptance_json"].as_str().unwrap()).unwrap();
+
+    let assertion = acceptance["assertions"][0].as_object().unwrap();
+    let metric = acceptance["metrics"][0].as_object().unwrap();
+    let rubric = acceptance["rubric"][0].as_object().unwrap();
+
+    assert!(assertion.contains_key("check_fn"));
+    assert!(assertion["check_fn"].is_null());
+    assert!(metric.contains_key("baseline"));
+    assert!(metric["baseline"].is_null());
+    assert!(metric.contains_key("current"));
+    assert!(metric["current"].is_null());
+    assert!(rubric.contains_key("score"));
+    assert!(rubric["score"].is_null());
+    assert!(rubric.contains_key("description"));
+    assert!(rubric["description"].is_null());
+}
+
+#[tokio::test]
 async fn nodes_create_with_parent_and_policy() {
     let (addr, _tmp) = start_server().await;
     let client = Client::new();

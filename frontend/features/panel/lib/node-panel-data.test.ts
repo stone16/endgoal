@@ -70,6 +70,48 @@ describe("node panel data helpers", () => {
     expect(acceptance.rubric[0]?.dimension).toBe("clarity");
   });
 
+  it("normalizes omitted structured acceptance option fields", () => {
+    const acceptance = parseNodeAcceptance(
+      JSON.stringify({
+        type: "structured",
+        assertions: [
+          {
+            id: "a1",
+            text: "artifact is reproducible",
+            status: "pending",
+          },
+        ],
+        metrics: [
+          {
+            id: "m1",
+            name: "coverage",
+            target: 80,
+            unit: "%",
+          },
+        ],
+        rubric: [
+          {
+            id: "r1",
+            dimension: "quality",
+            scale: 10,
+          },
+        ],
+      }),
+    );
+
+    expect(acceptance?.type).toBe("structured");
+
+    if (acceptance?.type !== "structured") {
+      throw new Error("expected structured acceptance");
+    }
+
+    expect(acceptance.assertions[0]?.check_fn).toBeNull();
+    expect(acceptance.metrics[0]?.baseline).toBeNull();
+    expect(acceptance.metrics[0]?.current).toBeNull();
+    expect(acceptance.rubric[0]?.score).toBeNull();
+    expect(acceptance.rubric[0]?.description).toBeNull();
+  });
+
   it("sorts runs with the newest run first", () => {
     const oldest: Run = {
       ...baseRun,
