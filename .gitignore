@@ -9,6 +9,10 @@ dist/
 build/
 .next/
 out/
+target/
+
+# Rust ts-rs default output (canonical copy is frontend/bindings/)
+crates/shared/bindings/
 
 # Environment
 .env
@@ -27,6 +31,15 @@ out/
 Thumbs.db
 
 # Runtime / local state
-runs/
+/runs/
+endgoal.db
+endgoal.db-shm
+endgoal.db-wal
+scratchpads/
 *.log
 *.pid
+.harness/*/
+!.harness/retro/
+!.harness/retro/**
+!.harness/config.json
+.review-loop/

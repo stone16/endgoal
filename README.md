@@ -62,6 +62,40 @@ For the full architectural specification, see [`docs/architecture-foundations.md
 
 For interactive wireframes showing each level, open [`docs/wireframes.html`](docs/wireframes.html) in a browser.
 
+## Local Development
+
+Requirements:
+
+- Rust stable 1.85 or newer for edition 2024 crates
+- pnpm for the Next.js frontend
+- SQLite via `sqlx`
+
+Create local environment defaults:
+
+```bash
+cp .env.example .env
+```
+
+Run database migrations:
+
+```bash
+DATABASE_URL=sqlite://endgoal.db?mode=rwc sqlx migrate run --source db/migrations
+```
+
+Starting the backend also applies pending migrations:
+
+```bash
+DATABASE_URL=sqlite://endgoal.db?mode=rwc cargo run -p endgoal-backend
+```
+
+Regenerate TypeScript bindings:
+
+```bash
+cargo test -p endgoal-shared --features generate-bindings export_all_bindings
+```
+
+The workspace Cargo config sets `TS_RS_EXPORT_DIR` to `frontend/bindings`, so the bindings export test writes to the frontend without requiring a per-command env var.
+
 ## Status
 
 EndGoal is in the **architectural design** phase. The 15 foundational decisions are locked. Interactive wireframes exist. No production code yet.
